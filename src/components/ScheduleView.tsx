@@ -1,9 +1,19 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 import { useAppData } from '../context/AppDataContext';
 import type { Event as AppEvent, EventTask } from '../context/AppDataContext';
-import { Plus, UserPlus, Briefcase, MapPin, ListChecks, Trash2 } from 'lucide-react';
+import { Plus, UserPlus, Briefcase, MapPin, ListChecks, Trash2, Sparkles } from 'lucide-react';
+import {
+  fetchLucidState,
+  goalLabelForTask,
+  isLucidConfigured,
+  lucidDayKey,
+  tasksForLucidDay,
+  toggleLucidTaskDone,
+  type LucidGoal,
+  type LucidTask,
+} from '../lib/lucidGoalState';
 import { Calendar, dateFnsLocalizer, Views } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay, addDays, addWeeks, addMonths } from 'date-fns';
 import { enUS } from 'date-fns/locale/en-US';
@@ -28,6 +38,71 @@ const ScheduleView = () => {
   const [newEvent, setNewEvent] = useState<Partial<AppEvent>>({
     title: '', date: new Date().toISOString().slice(0, 16), endDate: new Date(Date.now() + 3600000).toISOString().slice(0, 16), moneySpent: 0, moneyEarned: 0, contactIds: [], assetIds: [], placeIds: [], recurrence: 'none', tasks: [],
   });
+
+  const [lucidGoals, setLucidGoals] = useState<LucidGoal[]>([]);
+  const [lucidDayTasks, setLucidDayTasks] = useState<LucidTask[]>([]);
+  const [lucidLoading, setLucidLoading] = useState(false);
+  const [lucidError, setLucidError] = useState<string | null>(null);
+  const [lucidTogglingTid, setLucidTogglingTid] = useState<string | null>(null);
+
+  const lucidEnabled = isLucidConfigured();
+
+  useEffect(() => {
+    if (!showModal || !lucidEnabled || !newEvent.date) return;
+    let cancelled = false;
+    (async () => {
+      setLucidLoading(true);
+      setLucidError(null);
+      try {
+        const row = await fetchLucidState();
+        if (cancelled) return;
+        if (!row) {
+          setLucidGoals([]);
+          setLucidDayTasks([]);
+          setLucidError(
+            'No Lucid row in Supabase yet. Open Lucid once and sync so goal_app_state has id goal-achiever-main.',
+          );
+          return;
+        }
+        const day = new Date(newEvent.date as string);
+        setLucidGoals(row.goals);
+        setLucidDayTasks(tasksForLucidDay(row.tasks, day));
+      } catch (e) {
+        if (!cancelled) {
+          setLucidGoals([]);
+          setLucidDayTasks([]);
+          setLucidError(String((e as Error)?.message ?? e));
+        }
+      } finally {
+        if (!cancelled) setLucidLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showModal, lucidEnabled, newEvent.date]);
+
+  const handleLucidToggle = async (t: LucidTask) => {
+    if (!t.tid) {
+      setLucidError('This Lucid task has no tid yet — open Lucid and save once so tasks get stable ids.');
+      return;
+    }
+    setLucidError(null);
+    setLucidTogglingTid(String(t.tid));
+    try {
+      const day = new Date(newEvent.date as string);
+      await toggleLucidTaskDone(String(t.tid), day);
+      const row = await fetchLucidState();
+      if (row) {
+        setLucidGoals(row.goals);
+        setLucidDayTasks(tasksForLucidDay(row.tasks, day));
+      }
+    } catch (e) {
+      setLucidError(String((e as Error)?.message ?? e));
+    } finally {
+      setLucidTogglingTid(null);
+    }
+  };
 
   const openForm = (initialData: Partial<AppEvent> = {}) => {
     const copiedTasks = Array.isArray(initialData.tasks)
@@ -427,6 +502,79 @@ const ScheduleView = () => {
                   </button>
                 </div>
               </div>
+
+              {lucidEnabled && (
+                <div className="form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <Sparkles size={16} style={{ color: '#22d3ee' }} />
+                    Lucid tasks (this day)
+                  </label>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem' }}>
+                    Same database as{' '}
+                    <a
+                      href="https://github.com/clipsog/Goalachiever"
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: 'var(--primary)' }}
+                    >
+                      Goalachiever / Lucid
+                    </a>
+                    . Tasks are filtered to the <strong>local calendar day</strong> of the event start (
+                    {newEvent.date ? lucidDayKey(new Date(newEvent.date as string)) : '—'}). Completing here updates
+                    Lucid immediately.
+                  </p>
+                  {lucidLoading && (
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Loading Lucid…</p>
+                  )}
+                  {lucidError && (
+                    <p style={{ fontSize: '0.85rem', color: '#f87171', marginBottom: '0.5rem' }}>{lucidError}</p>
+                  )}
+                  {!lucidLoading && lucidDayTasks.length === 0 && !lucidError && (
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                      No Lucid tasks scheduled for this day.
+                    </p>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                    {lucidDayTasks.map((t) => {
+                      const tid = t.tid ? String(t.tid) : '';
+                      const busy = lucidTogglingTid === tid;
+                      return (
+                        <div
+                          key={tid || `${t.text}-${t.goalIndex}-${t.subIndex}`}
+                          style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            padding: '0.5rem 0.65rem',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(34, 211, 238, 0.25)',
+                            background: 'rgba(34, 211, 238, 0.06)',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={t.done}
+                            disabled={!tid || busy}
+                            onChange={() => void handleLucidToggle(t)}
+                            title={tid ? 'Syncs to Lucid' : 'Missing tid'}
+                          />
+                          <span style={{ flex: '1 1 200px', fontSize: '0.9rem' }}>{t.text}</span>
+                          <span
+                            style={{
+                              fontSize: '0.7rem',
+                              color: 'var(--text-muted)',
+                              maxWidth: '100%',
+                            }}
+                          >
+                            {goalLabelForTask(lucidGoals, t)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               
               <div style={{ display: 'flex', gap: '1rem' }}>
                 <div className="form-group" style={{ flex: 1 }}>
