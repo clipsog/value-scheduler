@@ -7,7 +7,7 @@ import { Plus, TrendingUp, MapPin, Users, Trash2, Edit3 } from 'lucide-react';
 type AssetsTab = 'items' | 'places' | 'clothing';
 
 const AssetsView = () => {
-  const { data, addAsset, updateAsset, addPlace, updatePlace, deletePlace, updateContact, addClothingItem, updateClothingItem, deleteClothingItem } =
+  const { data, addAsset, updateAsset, addPlace, updatePlace, deletePlace, updateContact, addClothingItem, deleteClothingItem } =
     useAppData();
   const [tab, setTab] = useState<AssetsTab>('items');
   const [showAssetModal, setShowAssetModal] = useState(false);
