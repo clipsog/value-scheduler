@@ -155,6 +155,53 @@ export function goalLabelForTask(goals: LucidGoal[], t: LucidTask): string {
   return sub?.text ? `${g.title} → ${sub.text}` : g.title;
 }
 
+export type LucidTaskSubgoalGroup = {
+  key: string;
+  heading: string;
+  tasks: LucidTask[];
+};
+
+function lucidSubgoalSectionHeading(goals: LucidGoal[], goalIndex: number, subIndex: number | null): string {
+  const g = goals[goalIndex];
+  const title = String(g?.title || '').trim();
+  if (!title) return `Goal ${goalIndex + 1}`;
+  if (subIndex == null) return `${title} · Main`;
+  const sub = g.subgoals?.[subIndex];
+  const st = String(sub?.text || '').trim();
+  return st ? `${title} · ${st}` : `${title} · Key result ${subIndex + 1}`;
+}
+
+/** Group open (incomplete) Lucid tasks under goal / subgoal headings for the schedule UI. */
+export function groupOpenLucidTasksBySubgoal(openTasks: LucidTask[], goals: LucidGoal[]): LucidTaskSubgoalGroup[] {
+  const map = new Map<string, LucidTask[]>();
+  for (const t of openTasks) {
+    const subKey = t.subIndex === null || t.subIndex === undefined ? 'main' : String(t.subIndex);
+    const key = `${t.goalIndex}__${subKey}`;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(t);
+  }
+  const entries = [...map.entries()].sort((a, b) => {
+    const [ga, sa] = a[0].split('__');
+    const [gb, sb] = b[0].split('__');
+    const cmpG = Number(ga) - Number(gb);
+    if (cmpG !== 0) return cmpG;
+    if (sa === 'main' && sb !== 'main') return -1;
+    if (sa !== 'main' && sb === 'main') return 1;
+    if (sa === 'main' && sb === 'main') return 0;
+    return Number(sa) - Number(sb);
+  });
+  return entries.map(([key, tasks]) => {
+    const [gi, sk] = key.split('__');
+    const goalIndex = Number(gi);
+    const subIndex = sk === 'main' ? null : Number(sk);
+    return {
+      key,
+      heading: lucidSubgoalSectionHeading(goals, goalIndex, subIndex),
+      tasks,
+    };
+  });
+}
+
 export type LucidGoalPickOption = {
   ref: { goalIndex: number; subIndex: number | null };
   label: string;

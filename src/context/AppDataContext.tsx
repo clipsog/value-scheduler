@@ -47,6 +47,10 @@ export type EventTask = {
   done: boolean;
   /** Optional: which asset this step supports (pick from your Assets list) */
   assetId?: string;
+  /**
+   * When set, checking this row done/undone also toggles that task in Lucid (`goal_app_state.tasks` by `tid`).
+   */
+  lucidTid?: string;
 };
 
 /** Pointer into Lucid `goal_app_state.goals` (same indices as the Lucid app). */

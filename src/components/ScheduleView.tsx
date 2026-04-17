@@ -12,6 +12,7 @@ import {
   lucidDayKey,
   lucidGoalRefKey,
   lucidTasksForEventDisplay,
+  groupOpenLucidTasksBySubgoal,
   toggleLucidTaskDone,
   type LucidGoal,
   type LucidTask,
@@ -76,6 +77,11 @@ const ScheduleView = () => {
   }, []);
 
   const lucidPickOptions = useMemo(() => buildLucidGoalPickOptions(lucidGoals), [lucidGoals]);
+
+  const lucidOpenGrouped = useMemo(
+    () => groupOpenLucidTasksBySubgoal(lucidDayTasks.filter((t) => !t.done), lucidGoals),
+    [lucidDayTasks, lucidGoals],
+  );
 
   const detailLucidGoalLabels = useMemo(() => {
     if (!detailEvent?.lucidGoalRefs?.length) return [];
@@ -284,9 +290,32 @@ const ScheduleView = () => {
     }
   };
 
-  const toggleTaskDone = (taskId: string) => {
-    const tasks = (newEvent.tasks || []).map((row) =>
-      row.id === taskId ? { ...row, done: !row.done } : row,
+  const toggleTaskDone = async (taskId: string) => {
+    const row = (newEvent.tasks || []).find((r) => r.id === taskId);
+    if (!row) return;
+    const nextDone = !row.done;
+
+    if (row.lucidTid && lucidEnabled) {
+      setLucidError(null);
+      setLucidTogglingTid(String(row.lucidTid));
+      try {
+        const dayAnchor = newEvent.date ? new Date(newEvent.date as string) : new Date();
+        await toggleLucidTaskDone(String(row.lucidTid), dayAnchor);
+        const st = await fetchLucidState();
+        if (st) {
+          setLucidGoals(st.goals);
+          setLucidDayTasks(lucidTasksForEventDisplay(st.tasks, newEvent.lucidGoalRefs, dayAnchor));
+        }
+      } catch (e) {
+        setLucidError(String((e as Error)?.message ?? e));
+        return;
+      } finally {
+        setLucidTogglingTid(null);
+      }
+    }
+
+    const tasks = (newEvent.tasks || []).map((r) =>
+      r.id === taskId ? { ...r, done: nextDone } : r,
     );
     setNewEvent({ ...newEvent, tasks });
     if (editingId) {
@@ -457,7 +486,7 @@ const ScheduleView = () => {
     return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '2px 4px', fontSize: '0.75rem', overflow: 'hidden' }}>
       <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{event.title}</div>
-      {(lucidN > 0 || labeled.length > 0 || event.moneyEarned > 0 || event.moneySpent > 0 || (event.contactIds && event.contactIds.length > 0) || (event.assetIds && event.assetIds.length > 0) || (event.placeIds && event.placeIds.length > 0)) && (
+      {(lucidN > 0 || openCount > 0 || event.moneyEarned > 0 || event.moneySpent > 0 || (event.contactIds && event.contactIds.length > 0) || (event.assetIds && event.assetIds.length > 0) || (event.placeIds && event.placeIds.length > 0)) && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', fontSize: '0.65rem', marginTop: '2px', alignItems: 'center' }}>
           {lucidN > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, opacity: 0.95 }} title="Lucid goals linked">
@@ -465,10 +494,10 @@ const ScheduleView = () => {
               {lucidN}
             </span>
           )}
-          {labeled.length > 0 && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, opacity: 0.95 }} title="Tasks done / total">
+          {openCount > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, opacity: 0.95 }} title="Open checklist items">
               <ListChecks size={10} />
-              {labeled.length - openCount}/{labeled.length}
+              {openCount}
             </span>
           )}
           {event.moneyEarned > 0 && <span style={{ color: '#34d399', fontWeight: 600 }}>+${event.moneyEarned}</span>}
@@ -677,22 +706,22 @@ const ScheduleView = () => {
 
               <div className="form-group" style={{ marginBottom: '1rem' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <ListChecks size={16} /> Checklist (this block)
+                  <ListChecks size={16} /> Block checklist
                 </label>
-                {(detailEvent.tasks || []).filter((t) => String(t.label || '').trim()).length === 0 ? (
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0.35rem 0 0' }}>No tasks.</p>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.5rem', lineHeight: 1.45 }}>
+                  Lines you add here live on this Value Schedule event only. To complete work in the Lucid app, use{' '}
+                  <strong>Lucid tasks</strong> below (or link a row to a Lucid task when editing the event).
+                </p>
+                {(detailEvent.tasks || []).filter((t) => String(t.label || '').trim() && !t.done).length === 0 ? (
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0.35rem 0 0' }}>
+                    No open tasks.
+                  </p>
                 ) : (
                   <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem', fontSize: '0.9rem' }}>
                     {(detailEvent.tasks || [])
-                      .filter((t) => String(t.label || '').trim())
+                      .filter((t) => String(t.label || '').trim() && !t.done)
                       .map((t) => (
-                        <li
-                          key={t.id}
-                          style={{
-                            textDecoration: t.done ? 'line-through' : undefined,
-                            opacity: t.done ? 0.75 : 1,
-                          }}
-                        >
+                        <li key={t.id} style={{ fontSize: '0.9rem' }}>
                           {t.label}
                         </li>
                       ))}
@@ -706,10 +735,15 @@ const ScheduleView = () => {
                     <Sparkles size={16} style={{ color: '#22d3ee' }} />
                     Lucid tasks
                   </label>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem' }}>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem', lineHeight: 1.45 }}>
+                    From your Lucid / Goal Achiever database (<code style={{ fontSize: '0.72rem' }}>goal_app_state</code>
+                    ). Grouped by goal and subgoal. <strong>Checking a task saves to Lucid immediately</strong> — the same
+                    completion state the Lucid app reads.
+                  </p>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0 0 0.5rem' }}>
                     {detailEvent.lucidGoalRefs?.length
-                      ? 'Tasks for linked goals (any day in Lucid).'
-                      : `Tasks on ${lucidDayKey(detailSlot.start)}.`}
+                      ? 'Showing tasks for goals linked to this block (dates in Lucid may differ).'
+                      : `Filtered to the calendar day of this block’s start: ${lucidDayKey(detailSlot.start)}.`}
                   </p>
                   {lucidLoading && (
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Loading Lucid…</p>
@@ -717,47 +751,55 @@ const ScheduleView = () => {
                   {lucidError && (
                     <p style={{ fontSize: '0.85rem', color: '#f87171', marginBottom: '0.5rem' }}>{lucidError}</p>
                   )}
-                  {!lucidLoading && lucidDayTasks.length === 0 && !lucidError && (
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No Lucid tasks to show.</p>
+                  {!lucidLoading && lucidOpenGrouped.length === 0 && !lucidError && (
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No open Lucid tasks.</p>
                   )}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
-                    {lucidDayTasks.map((t) => {
-                      const tid = t.tid ? String(t.tid) : '';
-                      const busy = lucidTogglingTid === tid;
-                      return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {lucidOpenGrouped.map((group) => (
+                      <div key={group.key}>
                         <div
-                          key={tid || `${t.text}-${t.goalIndex}-${t.subIndex}`}
                           style={{
-                            display: 'flex',
-                            flexWrap: 'wrap',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            padding: '0.5rem 0.65rem',
-                            borderRadius: '8px',
-                            border: '1px solid rgba(34, 211, 238, 0.25)',
-                            background: 'rgba(34, 211, 238, 0.06)',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            color: 'var(--text-muted)',
+                            marginBottom: '0.35rem',
+                            letterSpacing: '0.02em',
                           }}
                         >
-                          <input
-                            type="checkbox"
-                            checked={t.done}
-                            disabled={!tid || busy}
-                            onChange={() => void handleLucidToggle(t)}
-                            title={tid ? 'Syncs to Lucid' : 'Missing tid'}
-                          />
-                          <span style={{ flex: '1 1 200px', fontSize: '0.9rem' }}>{t.text}</span>
-                          <span
-                            style={{
-                              fontSize: '0.7rem',
-                              color: 'var(--text-muted)',
-                              maxWidth: '100%',
-                            }}
-                          >
-                            {goalLabelForTask(lucidGoals, t)}
-                          </span>
+                          {group.heading}
                         </div>
-                      );
-                    })}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                          {group.tasks.map((t) => {
+                            const tid = t.tid ? String(t.tid) : '';
+                            const busy = lucidTogglingTid === tid;
+                            return (
+                              <div
+                                key={tid || `${t.text}-${t.goalIndex}-${t.subIndex}`}
+                                style={{
+                                  display: 'flex',
+                                  flexWrap: 'wrap',
+                                  alignItems: 'center',
+                                  gap: '0.5rem',
+                                  padding: '0.5rem 0.65rem',
+                                  borderRadius: '8px',
+                                  border: '1px solid rgba(34, 211, 238, 0.25)',
+                                  background: 'rgba(34, 211, 238, 0.06)',
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={t.done}
+                                  disabled={!tid || busy}
+                                  onChange={() => void handleLucidToggle(t)}
+                                  title={tid ? 'Writes completion to Lucid (Supabase)' : 'Missing tid'}
+                                />
+                                <span style={{ flex: '1 1 200px', fontSize: '0.9rem' }}>{t.text}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -896,12 +938,12 @@ const ScheduleView = () => {
 
               <div className="form-group">
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <ListChecks size={16} /> Scheduler checklist (optional)
+                  <ListChecks size={16} /> Block checklist (optional)
                 </label>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem' }}>
-                  Extra steps for <strong>this</strong> calendar block only (not Lucid). Optional: tie lines to{' '}
-                  <strong>Assets</strong>. Lucid goals / day tasks use the <strong>Lucid</strong> sections above when
-                  connected.
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem', lineHeight: 1.45 }}>
+                  Notes for <strong>this</strong> Value Schedule event (stored with the event). Optional: tie rows to{' '}
+                  <strong>Assets</strong>. Link a row to a <strong>Lucid task</strong> below so checking it off updates
+                  Lucid the same way as in the Lucid tasks list.
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {(newEvent.tasks || []).map((task) => (
@@ -921,8 +963,9 @@ const ScheduleView = () => {
                       <input
                         type="checkbox"
                         checked={task.done}
-                        onChange={() => toggleTaskDone(task.id)}
-                        title="Mark done"
+                        disabled={Boolean(task.lucidTid && lucidTogglingTid === String(task.lucidTid))}
+                        onChange={() => void toggleTaskDone(task.id)}
+                        title={task.lucidTid ? 'Also updates Lucid when linked' : 'Mark done'}
                       />
                       <input
                         type="text"
@@ -953,6 +996,35 @@ const ScheduleView = () => {
                           </option>
                         ))}
                       </select>
+                      {lucidEnabled && (
+                        <select
+                          value={task.lucidTid || ''}
+                          onChange={(e) =>
+                            patchTask(task.id, { lucidTid: e.target.value || undefined })
+                          }
+                          title="Link this line to a Lucid task — checking it off updates goal_app_state"
+                          style={{
+                            flex: '1 1 200px',
+                            minWidth: '140px',
+                            borderRadius: '6px',
+                            padding: '0.35rem 0.5rem',
+                            border: '1px solid rgba(34, 211, 238, 0.35)',
+                            background: 'var(--bg-base)',
+                            color: 'inherit',
+                            fontSize: '0.8rem',
+                          }}
+                        >
+                          <option value="">Lucid link (optional)</option>
+                          {lucidDayTasks
+                            .filter((t) => t.tid && !t.done)
+                            .map((t) => (
+                              <option key={String(t.tid)} value={String(t.tid)}>
+                                {goalLabelForTask(lucidGoals, t)} —{' '}
+                                {t.text.length > 48 ? `${t.text.slice(0, 48)}…` : t.text}
+                              </option>
+                            ))}
+                        </select>
+                      )}
                       <button
                         type="button"
                         className="btn-secondary"
@@ -975,22 +1047,23 @@ const ScheduleView = () => {
                 <div className="form-group">
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                     <Sparkles size={16} style={{ color: '#22d3ee' }} />
-                    Lucid tasks (this day)
+                    Lucid tasks
                   </label>
-                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem' }}>
-                    Same database as{' '}
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem', lineHeight: 1.45 }}>
+                    Same app as{' '}
                     <a
                       href="https://github.com/clipsog/Goalachiever"
                       target="_blank"
                       rel="noreferrer"
                       style={{ color: 'var(--primary)' }}
                     >
-                      Goalachiever / Lucid
+                      Goal Achiever / Lucid
                     </a>
-                    .                     When this block <strong>links Lucid goals</strong>, tasks for those goals are listed (their dates in
-                    Lucid may differ from this slot). Otherwise tasks match the <strong>local calendar day</strong> of the
-                    event start ({newEvent.date ? lucidDayKey(new Date(newEvent.date as string)) : '—'}). Completing
-                    here updates Lucid immediately.
+                    — grouped by goal and subgoal. <strong>Every checkbox writes to Supabase</strong> (
+                    <code style={{ fontSize: '0.72rem' }}>goal_app_state</code>), so Lucid shows the same completion.
+                    {newEvent.lucidGoalRefs?.length
+                      ? ' Tasks are filtered by goals linked above (dates in Lucid may differ from this block).'
+                      : ` Otherwise filtered to the calendar day of this event’s start (${newEvent.date ? lucidDayKey(new Date(newEvent.date as string)) : '—'}).`}
                   </p>
                   {lucidLoading && (
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Loading Lucid…</p>
@@ -998,49 +1071,57 @@ const ScheduleView = () => {
                   {lucidError && (
                     <p style={{ fontSize: '0.85rem', color: '#f87171', marginBottom: '0.5rem' }}>{lucidError}</p>
                   )}
-                  {!lucidLoading && lucidDayTasks.length === 0 && !lucidError && (
+                  {!lucidLoading && lucidOpenGrouped.length === 0 && !lucidError && (
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                      No Lucid tasks scheduled for this day.
+                      No open Lucid tasks for this filter.
                     </p>
                   )}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
-                    {lucidDayTasks.map((t) => {
-                      const tid = t.tid ? String(t.tid) : '';
-                      const busy = lucidTogglingTid === tid;
-                      return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {lucidOpenGrouped.map((group) => (
+                      <div key={group.key}>
                         <div
-                          key={tid || `${t.text}-${t.goalIndex}-${t.subIndex}`}
                           style={{
-                            display: 'flex',
-                            flexWrap: 'wrap',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            padding: '0.5rem 0.65rem',
-                            borderRadius: '8px',
-                            border: '1px solid rgba(34, 211, 238, 0.25)',
-                            background: 'rgba(34, 211, 238, 0.06)',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            color: 'var(--text-muted)',
+                            marginBottom: '0.35rem',
+                            letterSpacing: '0.02em',
                           }}
                         >
-                          <input
-                            type="checkbox"
-                            checked={t.done}
-                            disabled={!tid || busy}
-                            onChange={() => void handleLucidToggle(t)}
-                            title={tid ? 'Syncs to Lucid' : 'Missing tid'}
-                          />
-                          <span style={{ flex: '1 1 200px', fontSize: '0.9rem' }}>{t.text}</span>
-                          <span
-                            style={{
-                              fontSize: '0.7rem',
-                              color: 'var(--text-muted)',
-                              maxWidth: '100%',
-                            }}
-                          >
-                            {goalLabelForTask(lucidGoals, t)}
-                          </span>
+                          {group.heading}
                         </div>
-                      );
-                    })}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                          {group.tasks.map((t) => {
+                            const tid = t.tid ? String(t.tid) : '';
+                            const busy = lucidTogglingTid === tid;
+                            return (
+                              <div
+                                key={tid || `${t.text}-${t.goalIndex}-${t.subIndex}`}
+                                style={{
+                                  display: 'flex',
+                                  flexWrap: 'wrap',
+                                  alignItems: 'center',
+                                  gap: '0.5rem',
+                                  padding: '0.5rem 0.65rem',
+                                  borderRadius: '8px',
+                                  border: '1px solid rgba(34, 211, 238, 0.25)',
+                                  background: 'rgba(34, 211, 238, 0.06)',
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={t.done}
+                                  disabled={!tid || busy}
+                                  onChange={() => void handleLucidToggle(t)}
+                                  title={tid ? 'Writes completion to Lucid (Supabase)' : 'Missing tid'}
+                                />
+                                <span style={{ flex: '1 1 200px', fontSize: '0.9rem' }}>{t.text}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
