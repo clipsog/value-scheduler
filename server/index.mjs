@@ -45,7 +45,46 @@ function resolveDatabaseUrl() {
   return url;
 }
 
-/** Supabase direct `db.*.supabase.co:5432` often resolves AAAA first; Render may have no IPv6 route. */
+function poolerHostnameFromEnv() {
+  const raw = process.env.SUPABASE_POOLER_HOST?.trim();
+  if (raw) return raw.replace(/^https?:\/\//i, '').split('/')[0];
+  const region = process.env.SUPABASE_POOLER_REGION?.trim();
+  if (region) return `${region}.pooler.supabase.com`;
+  return '';
+}
+
+/**
+ * Render often cannot use Supabase direct `db.*:5432` (AAAA / no A). Transaction pooler :6543 works.
+ * Set SUPABASE_POOLER_HOST (e.g. aws-1-us-west-2.pooler.supabase.com) or SUPABASE_POOLER_REGION (e.g. aws-1-us-west-2).
+ */
+function applySupabasePoolerRewrite(connectionString) {
+  const poolerHost = poolerHostnameFromEnv();
+  if (!poolerHost) return connectionString;
+  const httpish = connectionString.replace(/^postgres(ql)?:/i, 'http:');
+  let u;
+  try {
+    u = new URL(httpish);
+  } catch {
+    return connectionString;
+  }
+  const host = u.hostname;
+  const port = u.port || '5432';
+  const ref = host.match(/^db\.([^.]+)\.supabase\.co$/i)?.[1];
+  if (!ref || port !== '5432') return connectionString;
+  const user = (u.username || '').toLowerCase();
+  if (user !== 'postgres') return connectionString;
+  const nu = new URL('http://127.0.0.1');
+  nu.hostname = poolerHost;
+  nu.port = '6543';
+  nu.username = `postgres.${ref}`;
+  nu.password = u.password;
+  nu.pathname = u.pathname && u.pathname !== '/' ? u.pathname : '/postgres';
+  const out = nu.toString().replace(/^http:/i, 'postgresql:');
+  console.log(`[value-scheduler] pooler ${poolerHost}:6543 user=postgres.${ref} (Render / IPv6-safe)`);
+  return out;
+}
+
+/** Supabase direct `db.*.supabase.co:5432` — try A record / IPv4-only lookup when not using pooler. */
 async function resolveSupabaseDirectHostnameToIpv4(connectionString) {
   const httpish = connectionString.replace(/^postgres(ql)?:/i, 'http:');
   let u;
@@ -60,13 +99,36 @@ async function resolveSupabaseDirectHostnameToIpv4(connectionString) {
     return connectionString;
   }
   try {
+    const list = await dns.promises.resolve4(host);
+    if (list?.length) {
+      u.hostname = list[0];
+      const out = u.toString().replace(/^http:/i, 'postgresql:');
+      console.log(`[value-scheduler] resolved ${host} → ${list[0]} (A record)`);
+      return out;
+    }
+  } catch {
+    /* no A records */
+  }
+  try {
+    const all = await dns.promises.lookup(host, { all: true, verbatim: false });
+    const v4 = all.find((x) => x.family === 4);
+    if (v4) {
+      u.hostname = v4.address;
+      const out = u.toString().replace(/^http:/i, 'postgresql:');
+      console.log(`[value-scheduler] resolved ${host} → ${v4.address} (lookup)`);
+      return out;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
     const { address } = await dns.promises.lookup(host, { family: 4 });
     u.hostname = address;
     const out = u.toString().replace(/^http:/i, 'postgresql:');
-    console.log(`[value-scheduler] resolved ${host} → ${address} (IPv4 for Postgres)`);
+    console.log(`[value-scheduler] resolved ${host} → ${address} (IPv4)`);
     return out;
   } catch (e) {
-    console.warn('[value-scheduler] IPv4 lookup failed, using hostname:', e?.message ?? e);
+    console.warn('[value-scheduler] no IPv4 for', host, '- set SUPABASE_POOLER_REGION or SUPABASE_POOLER_HOST:', e?.message ?? e);
     return connectionString;
   }
 }
@@ -77,7 +139,10 @@ let pool;
 
 try {
   connectionString = resolveDatabaseUrl();
-  const connStr = await resolveSupabaseDirectHostnameToIpv4(connectionString);
+  let connStr = applySupabasePoolerRewrite(connectionString);
+  if (connStr === connectionString) {
+    connStr = await resolveSupabaseDirectHostnameToIpv4(connectionString);
+  }
   dbIsLocal =
     connStr.includes('127.0.0.1') ||
     connStr.includes('localhost') ||
@@ -265,7 +330,7 @@ boot().catch((err) => {
     );
   } else if (err?.code === 'ENETUNREACH' || err?.errno === -101) {
     console.error(
-      'API boot failed: network unreachable to Postgres (often IPv6). This server now prefers IPv4 DNS; redeploy. If it persists, use Supabase Transaction pooler (port 6543, user postgres.<ref>) instead of direct db.*:5432.',
+      'API boot failed: Postgres unreachable (often Supabase direct db host = IPv6 only on Render). Set SUPABASE_POOLER_REGION=aws-1-us-west-2 (from Supabase → Connect → pooler host, without .pooler.supabase.com) or SUPABASE_POOLER_HOST=aws-1-us-west-2.pooler.supabase.com — keep DATABASE_URL as the direct db URI; the server rewrites to pooler.',
     );
     console.error(err);
   } else {
