@@ -7,11 +7,50 @@ const { Pool } = pg;
 const PORT = Number(process.env.PORT ?? 8788);
 const ROW_ID = process.env.ASSET_SCHEDULER_ROW_ID ?? 'asset-scheduler-main';
 
-const connectionString =
-  process.env.DATABASE_URL ??
-  'postgresql://assets:assets_dev@127.0.0.1:54331/value_scheduler';
+const ON_RENDER = process.env.RENDER === 'true' || process.env.RENDER === '1';
 
-const pool = new Pool({ connectionString });
+function resolveDatabaseUrl() {
+  const raw = process.env.DATABASE_URL?.trim();
+  const localDefault = 'postgresql://assets:assets_dev@127.0.0.1:54331/value_scheduler';
+  const url = raw || (ON_RENDER ? '' : localDefault);
+  if (!url) {
+    throw new Error(
+      'DATABASE_URL is missing. In Render → Environment, set DATABASE_URL to your Supabase Postgres URI (Database → Connect → Transaction pooler).',
+    );
+  }
+  if (/\[YOUR-|\[PASSWORD\]|YOUR-PASSWORD|password_here/i.test(url)) {
+    throw new Error(
+      'DATABASE_URL still contains a placeholder (e.g. [YOUR-PASSWORD]). Replace it with your real database password from Supabase → Database settings.',
+    );
+  }
+  try {
+    new URL(url.replace(/^postgres(ql)?:/i, 'http:'));
+  } catch {
+    throw new Error(
+      'DATABASE_URL is not a valid connection URI. Paste the full Supabase URI; percent-encode $ → %24 and @ : / in the password if needed; one line, no smart quotes.',
+    );
+  }
+  return url;
+}
+
+let connectionString;
+let dbIsLocal;
+let pool;
+
+try {
+  connectionString = resolveDatabaseUrl();
+  dbIsLocal =
+    connectionString.includes('127.0.0.1') ||
+    connectionString.includes('localhost') ||
+    connectionString.includes('@host.docker.internal');
+  pool = new Pool({
+    connectionString,
+    ssl: dbIsLocal ? false : { rejectUnauthorized: false },
+  });
+} catch (e) {
+  console.error('[value-scheduler]', e?.message ?? e);
+  process.exit(1);
+}
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -168,6 +207,16 @@ async function boot() {
 }
 
 boot().catch((err) => {
-  console.error('API boot failed (is Postgres up on 54331?)', err);
+  if (err?.code === 'ERR_INVALID_URL') {
+    console.error(
+      'API boot failed: DATABASE_URL cannot be parsed by the Postgres client. Re-paste from Supabase (Transaction pooler); encode $ @ : / in the password; no brackets or placeholders.',
+    );
+  } else {
+    console.error(
+      'API boot failed:',
+      dbIsLocal ? 'is Postgres up on 54331? (npm run db:up)' : 'check DATABASE_URL, Supabase network access, and credentials.',
+      err,
+    );
+  }
   process.exit(1);
 });
