@@ -1,9 +1,15 @@
 import 'dotenv/config';
+import dns from 'node:dns';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import pg from 'pg';
+
+// Render often has no usable IPv6 route; Supabase `db.*.supabase.co` may resolve AAAA first → ENETUNREACH.
+if (typeof dns.setDefaultResultOrder === 'function') {
+  dns.setDefaultResultOrder('ipv4first');
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(__dirname, '..', 'dist');
@@ -229,6 +235,11 @@ boot().catch((err) => {
     console.error(
       'API boot failed: DATABASE_URL cannot be parsed by the Postgres client. Re-paste from Supabase (Transaction pooler); encode $ @ : / in the password; no brackets or placeholders.',
     );
+  } else if (err?.code === 'ENETUNREACH' || err?.errno === -101) {
+    console.error(
+      'API boot failed: network unreachable to Postgres (often IPv6). This server now prefers IPv4 DNS; redeploy. If it persists, use Supabase Transaction pooler (port 6543, user postgres.<ref>) instead of direct db.*:5432.',
+    );
+    console.error(err);
   } else {
     console.error(
       'API boot failed:',
