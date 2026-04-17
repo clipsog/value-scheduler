@@ -51,7 +51,14 @@ export function createLucidClient(): SupabaseClient | null {
   const url = lucidResolvedUrl();
   const key = lucidResolvedAnonKey();
   if (!url || !key) return null;
-  return createClient(url, key);
+  return createClient(url, key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+      storageKey: 'sb-lucid-goal-app',
+    },
+  });
 }
 
 /** Same calendar-day key Lucid uses (`Date.toDateString()`). */
@@ -94,23 +101,17 @@ export type LucidCloudRow = {
 export async function fetchLucidState(): Promise<LucidCloudRow | null> {
   const sb = createLucidClient();
   if (!sb) return null;
-  const { data, error } = await sb
-    .from(LUCID_TABLE)
-    .select('goals,tasks,deleted_task_ids,deleted_task_keys,prayers')
-    .eq('id', LUCID_ROW_ID)
-    .maybeSingle();
+  // Use * so older goal_app_state rows (missing tombstone/prayer columns) still load.
+  const { data, error } = await sb.from(LUCID_TABLE).select('*').eq('id', LUCID_ROW_ID).maybeSingle();
   if (error) throw error;
   if (!data) return null;
+  const d = data as Record<string, unknown>;
   return {
-    goals: Array.isArray(data.goals) ? (data.goals as LucidGoal[]) : [],
-    tasks: Array.isArray(data.tasks) ? (data.tasks as LucidTask[]) : [],
-    deleted_task_ids: Array.isArray(data.deleted_task_ids)
-      ? data.deleted_task_ids.map(String)
-      : [],
-    deleted_task_keys: Array.isArray(data.deleted_task_keys)
-      ? data.deleted_task_keys.map(String)
-      : [],
-    prayers: Array.isArray(data.prayers) ? data.prayers : [],
+    goals: Array.isArray(d.goals) ? (d.goals as LucidGoal[]) : [],
+    tasks: Array.isArray(d.tasks) ? (d.tasks as LucidTask[]) : [],
+    deleted_task_ids: Array.isArray(d.deleted_task_ids) ? (d.deleted_task_ids as string[]).map(String) : [],
+    deleted_task_keys: Array.isArray(d.deleted_task_keys) ? (d.deleted_task_keys as string[]).map(String) : [],
+    prayers: Array.isArray(d.prayers) ? d.prayers : [],
   };
 }
 
@@ -162,15 +163,12 @@ export async function toggleLucidTaskDone(tid: string, dayAnchor: Date): Promise
     );
   }
 
-  const { data: row, error } = await sb
-    .from(LUCID_TABLE)
-    .select('goals,tasks,deleted_task_ids,deleted_task_keys,prayers')
-    .eq('id', LUCID_ROW_ID)
-    .single();
+  const { data: row, error } = await sb.from(LUCID_TABLE).select('*').eq('id', LUCID_ROW_ID).single();
   if (error) throw error;
 
-  const goals = Array.isArray(row.goals) ? ([...row.goals] as LucidGoal[]) : [];
-  const tasks: LucidTask[] = Array.isArray(row.tasks) ? [...(row.tasks as LucidTask[])] : [];
+  const r = row as Record<string, unknown>;
+  const goals = Array.isArray(r.goals) ? ([...r.goals] as LucidGoal[]) : [];
+  const tasks: LucidTask[] = Array.isArray(r.tasks) ? [...(r.tasks as LucidTask[])] : [];
   const idx = tasks.findIndex((t) => String(t.tid) === String(tid));
   if (idx === -1) throw new Error('Task not found in Lucid cloud state.');
 
@@ -197,15 +195,17 @@ export async function toggleLucidTaskDone(tid: string, dayAnchor: Date): Promise
   }
   tasks[idx] = cur;
 
-  const payload = {
+  const payload: Record<string, unknown> = {
     id: LUCID_ROW_ID,
     goals,
     tasks,
-    prayers: Array.isArray(row.prayers) ? row.prayers : [],
-    deleted_task_ids: Array.isArray(row.deleted_task_ids) ? row.deleted_task_ids : [],
-    deleted_task_keys: Array.isArray(row.deleted_task_keys) ? row.deleted_task_keys : [],
     updated_at: new Date().toISOString(),
   };
+  for (const k of ['prayers', 'deleted_task_ids', 'deleted_task_keys'] as const) {
+    if (Object.prototype.hasOwnProperty.call(r, k) && r[k] !== undefined) {
+      payload[k] = r[k];
+    }
+  }
 
   const { error: upErr } = await sb.from(LUCID_TABLE).upsert(payload, { onConflict: 'id' });
   if (upErr) throw upErr;
