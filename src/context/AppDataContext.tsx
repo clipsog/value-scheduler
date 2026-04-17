@@ -41,6 +41,14 @@ async function warnLocalApiGetStateFailed(res: Response) {
   );
 }
 
+export type EventTask = {
+  id: string;
+  label: string;
+  done: boolean;
+  /** Optional: which asset this step supports (pick from your Assets list) */
+  assetId?: string;
+};
+
 export type Event = {
   id: string;
   title: string;
@@ -55,6 +63,8 @@ export type Event = {
   isRecurring?: boolean;
   recurrence?: 'daily' | 'weekly' | 'monthly' | 'none';
   color?: string;
+  /** Checklist for this calendar slot (goals / steps); can link rows to assets */
+  tasks?: EventTask[];
 };
 
 export type Subscription = {
@@ -205,10 +215,25 @@ function normalizeAppData(raw: Partial<AppData> | null | undefined): AppData {
   const places = Array.isArray(e.places) ? e.places : [];
   const clothing = Array.isArray((e as any).clothing) ? ((e as any).clothing as ClothingItem[]) : [];
   return {
-    events: events.map((ev) => ({
-      ...ev,
-      placeIds: Array.isArray(ev.placeIds) ? ev.placeIds : [],
-    })) as Event[],
+    events: events.map((ev) => {
+      const rawTasks = Array.isArray((ev as Event).tasks) ? (ev as Event).tasks! : [];
+      const tasks: EventTask[] = rawTasks
+        .filter((t) => t && typeof (t as EventTask).label === 'string' && String((t as EventTask).label).trim())
+        .map((t) => {
+          const x = t as EventTask;
+          return {
+            id: typeof x.id === 'string' && x.id ? x.id : crypto.randomUUID(),
+            label: String(x.label).trim(),
+            done: Boolean(x.done),
+            assetId: typeof x.assetId === 'string' && x.assetId ? x.assetId : undefined,
+          };
+        });
+      return {
+        ...ev,
+        placeIds: Array.isArray(ev.placeIds) ? ev.placeIds : [],
+        tasks,
+      };
+    }) as Event[],
     subscriptions: Array.isArray(e.subscriptions) ? e.subscriptions : [],
     assets: Array.isArray(e.assets) ? e.assets : [],
     contacts: contacts.map((c) => {

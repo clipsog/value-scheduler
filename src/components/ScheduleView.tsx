@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { v4 as uuidv4 } from 'uuid';
 import { useAppData } from '../context/AppDataContext';
-import type { Event as AppEvent } from '../context/AppDataContext';
-import { Plus, UserPlus, Briefcase, MapPin } from 'lucide-react';
+import type { Event as AppEvent, EventTask } from '../context/AppDataContext';
+import { Plus, UserPlus, Briefcase, MapPin, ListChecks, Trash2 } from 'lucide-react';
 import { Calendar, dateFnsLocalizer, Views } from 'react-big-calendar';
 import { format, parse, startOfWeek, getDay, addDays, addWeeks, addMonths } from 'date-fns';
 import { enUS } from 'date-fns/locale/en-US';
@@ -25,13 +26,17 @@ const ScheduleView = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newEvent, setNewEvent] = useState<Partial<AppEvent>>({
-    title: '', date: new Date().toISOString().slice(0, 16), endDate: new Date(Date.now() + 3600000).toISOString().slice(0, 16), moneySpent: 0, moneyEarned: 0, contactIds: [], assetIds: [], placeIds: [], recurrence: 'none'
+    title: '', date: new Date().toISOString().slice(0, 16), endDate: new Date(Date.now() + 3600000).toISOString().slice(0, 16), moneySpent: 0, moneyEarned: 0, contactIds: [], assetIds: [], placeIds: [], recurrence: 'none', tasks: [],
   });
 
   const openForm = (initialData: Partial<AppEvent> = {}) => {
+    const copiedTasks = Array.isArray(initialData.tasks)
+      ? initialData.tasks.map((t) => ({ ...t }))
+      : [];
     setNewEvent({
       title: '', date: new Date().toISOString().slice(0, 16), endDate: new Date(Date.now() + 3600000).toISOString().slice(0, 16), moneySpent: 0, moneyEarned: 0, contactIds: [], assetIds: [], placeIds: [], recurrence: 'none',
-      ...initialData
+      ...initialData,
+      tasks: copiedTasks,
     });
     setEditingId(initialData.id || null);
     setShowModal(true);
@@ -47,10 +52,15 @@ const ScheduleView = () => {
         endD = new Date(endD.getTime() + 24 * 60 * 60 * 1000);
       }
 
+      const tasks = (newEvent.tasks || [])
+        .map((t) => ({ ...t, label: t.label.trim() }))
+        .filter((t) => t.label.length > 0);
+
       const payload = {
         ...newEvent,
         date: startD.toISOString(),
         endDate: endD.toISOString(),
+        tasks,
       };
       
       if (editingId) {
@@ -78,6 +88,40 @@ const ScheduleView = () => {
       ...newEvent,
       placeIds: ids.includes(pId) ? ids.filter((id) => id !== pId) : [...ids, pId],
     });
+  };
+
+  const addTaskRow = () => {
+    const tasks = [...(newEvent.tasks || []), { id: uuidv4(), label: '', done: false } satisfies EventTask];
+    setNewEvent({ ...newEvent, tasks });
+  };
+
+  const patchTask = (taskId: string, patch: Partial<EventTask>) => {
+    const tasks = (newEvent.tasks || []).map((row) => (row.id === taskId ? { ...row, ...patch } : row));
+    const assetIds = new Set([...(newEvent.assetIds || [])]);
+    if (patch.assetId) assetIds.add(patch.assetId);
+    const next = { ...newEvent, tasks, assetIds: [...assetIds] };
+    setNewEvent(next);
+    if (editingId) {
+      updateEvent(editingId, { tasks, assetIds: [...assetIds] });
+    }
+  };
+
+  const toggleTaskDone = (taskId: string) => {
+    const tasks = (newEvent.tasks || []).map((row) =>
+      row.id === taskId ? { ...row, done: !row.done } : row,
+    );
+    setNewEvent({ ...newEvent, tasks });
+    if (editingId) {
+      updateEvent(editingId, { tasks });
+    }
+  };
+
+  const removeTask = (taskId: string) => {
+    const tasks = (newEvent.tasks || []).filter((row) => row.id !== taskId);
+    setNewEvent({ ...newEvent, tasks });
+    if (editingId) {
+      updateEvent(editingId, { tasks });
+    }
   };
 
   const handleSelectSlot = (slotInfo: any) => {
@@ -162,11 +206,21 @@ const ScheduleView = () => {
     return instances;
   }, [data.events]);
 
-  const EventComponent = ({ event }: any) => (
+  const EventComponent = ({ event }: any) => {
+    const taskList = (event.tasks || []) as EventTask[];
+    const labeled = taskList.filter((t) => String(t.label || '').trim());
+    const openCount = labeled.filter((t) => !t.done).length;
+    return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '2px 4px', fontSize: '0.75rem', overflow: 'hidden' }}>
       <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{event.title}</div>
-      {(event.moneyEarned > 0 || event.moneySpent > 0 || (event.contactIds && event.contactIds.length > 0) || (event.assetIds && event.assetIds.length > 0) || (event.placeIds && event.placeIds.length > 0)) && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', fontSize: '0.65rem', marginTop: '2px' }}>
+      {(labeled.length > 0 || event.moneyEarned > 0 || event.moneySpent > 0 || (event.contactIds && event.contactIds.length > 0) || (event.assetIds && event.assetIds.length > 0) || (event.placeIds && event.placeIds.length > 0)) && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', fontSize: '0.65rem', marginTop: '2px', alignItems: 'center' }}>
+          {labeled.length > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, opacity: 0.95 }} title="Tasks done / total">
+              <ListChecks size={10} />
+              {labeled.length - openCount}/{labeled.length}
+            </span>
+          )}
           {event.moneyEarned > 0 && <span style={{ color: '#34d399', fontWeight: 600 }}>+${event.moneyEarned}</span>}
           {event.moneySpent > 0 && <span style={{ color: '#f87171', fontWeight: 600 }}>-${event.moneySpent}</span>}
           {event.contactIds && event.contactIds.length > 0 && <UserPlus size={10} style={{ opacity: 0.7 }} />}
@@ -176,6 +230,7 @@ const ScheduleView = () => {
       )}
     </div>
   );
+  };
 
   return (
     <>
@@ -295,7 +350,82 @@ const ScheduleView = () => {
               
               <div className="form-group">
                 <label>Event Title</label>
-                <input type="text" value={newEvent.title} onChange={e => setNewEvent({...newEvent, title: e.target.value})} placeholder="Project Meeting" autoFocus />
+                <input type="text" value={newEvent.title} onChange={e => setNewEvent({...newEvent, title: e.target.value})} placeholder="Goal block, deep work, workout…" autoFocus />
+              </div>
+
+              <div className="form-group">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <ListChecks size={16} /> Goals &amp; tasks (optional)
+                </label>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem' }}>
+                  Tie checklist items to <strong>Assets</strong> so this calendar slot shows what to do and what to complete. Checking a box saves immediately when editing an existing event.
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {(newEvent.tasks || []).map((task) => (
+                    <div
+                      key={task.id}
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                        padding: '0.5rem 0.65rem',
+                        borderRadius: '8px',
+                        border: '1px solid var(--glass-border)',
+                        background: 'rgba(0,0,0,0.15)',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={task.done}
+                        onChange={() => toggleTaskDone(task.id)}
+                        title="Mark done"
+                      />
+                      <input
+                        type="text"
+                        value={task.label}
+                        onChange={(e) => patchTask(task.id, { label: e.target.value })}
+                        placeholder="Task description"
+                        style={{ flex: '1 1 140px', minWidth: '120px' }}
+                      />
+                      <select
+                        value={task.assetId || ''}
+                        onChange={(e) =>
+                          patchTask(task.id, { assetId: e.target.value || undefined })
+                        }
+                        style={{
+                          flex: '0 1 160px',
+                          minWidth: '100px',
+                          borderRadius: '6px',
+                          padding: '0.35rem 0.5rem',
+                          border: '1px solid var(--glass-border)',
+                          background: 'var(--bg-base)',
+                          color: 'inherit',
+                        }}
+                      >
+                        <option value="">Asset (optional)</option>
+                        {data.assets.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => removeTask(task.id)}
+                        style={{ padding: '0.35rem 0.5rem' }}
+                        title="Remove task"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                  <button type="button" className="btn-secondary" onClick={addTaskRow} style={{ alignSelf: 'flex-start' }}>
+                    <Plus size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+                    Add task
+                  </button>
+                </div>
               </div>
               
               <div style={{ display: 'flex', gap: '1rem' }}>
