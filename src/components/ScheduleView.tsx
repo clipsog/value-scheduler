@@ -1,9 +1,9 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 import { useAppData } from '../context/AppDataContext';
 import type { Event as AppEvent, EventTask, LucidGoalRef } from '../context/AppDataContext';
-import { Plus, UserPlus, Briefcase, MapPin, ListChecks, Trash2, Sparkles } from 'lucide-react';
+import { Plus, UserPlus, Briefcase, MapPin, ListChecks, Trash2, Sparkles, Pencil } from 'lucide-react';
 import {
   buildLucidGoalPickOptions,
   fetchLucidState,
@@ -11,7 +11,7 @@ import {
   isLucidConfigured,
   lucidDayKey,
   lucidGoalRefKey,
-  tasksForLucidDay,
+  lucidTasksForEventDisplay,
   toggleLucidTaskDone,
   type LucidGoal,
   type LucidTask,
@@ -47,12 +47,61 @@ const ScheduleView = () => {
   const [lucidError, setLucidError] = useState<string | null>(null);
   const [lucidTogglingTid, setLucidTogglingTid] = useState<string | null>(null);
 
+  const [detailEvent, setDetailEvent] = useState<AppEvent | null>(null);
+  const [detailSlot, setDetailSlot] = useState<{ start: Date; end: Date } | null>(null);
+  const [detailCalId, setDetailCalId] = useState<string | null>(null);
+
+  /** After an event is selected, ignore stray `onSelectSlot` briefly (same gesture / timer ordering). */
+  const ignoreSlotSelectionUntilRef = useRef(0);
+  /** `slotInfo.box` is sometimes missing; fall back to last pointer for elementFromPoint. */
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  /** Set on pointerdown (capture): true if the user pressed on an event chip, not empty grid. */
+  const pointerDownOnCalendarEventRef = useRef(false);
+  const calendarWrapRef = useRef<HTMLDivElement | null>(null);
+
   const lucidEnabled = isLucidConfigured();
+
+  useLayoutEffect(() => {
+    const el = calendarWrapRef.current;
+    if (!el) return;
+    const onPointerDownCapture = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      lastPointerRef.current = { x: e.clientX, y: e.clientY };
+      pointerDownOnCalendarEventRef.current = !!t?.closest?.(
+        '.rbc-event, .rbc-background-event, .rbc-agenda-event-cell',
+      );
+    };
+    el.addEventListener('pointerdown', onPointerDownCapture, true);
+    return () => el.removeEventListener('pointerdown', onPointerDownCapture, true);
+  }, []);
 
   const lucidPickOptions = useMemo(() => buildLucidGoalPickOptions(lucidGoals), [lucidGoals]);
 
+  const detailLucidGoalLabels = useMemo(() => {
+    if (!detailEvent?.lucidGoalRefs?.length) return [];
+    const opts = buildLucidGoalPickOptions(lucidGoals);
+    return detailEvent.lucidGoalRefs.map((ref) => {
+      const hit = opts.find((o) => lucidGoalRefKey(o.ref) === lucidGoalRefKey(ref));
+      return hit?.label ?? `Goal #${ref.goalIndex}`;
+    });
+  }, [detailEvent?.lucidGoalRefs, lucidGoals]);
+
+  const closeEventDetail = () => {
+    setDetailEvent(null);
+    setDetailSlot(null);
+    setDetailCalId(null);
+  };
+
   useEffect(() => {
-    if (!showModal || !lucidEnabled || !newEvent.date) return;
+    if (!lucidEnabled) return;
+    if (!showModal && !detailEvent) return;
+    const dayAnchor = showModal
+      ? newEvent.date
+        ? new Date(newEvent.date as string)
+        : null
+      : detailSlot?.start ?? null;
+    if (!dayAnchor) return;
+    const refs = showModal ? newEvent.lucidGoalRefs : detailEvent?.lucidGoalRefs;
     let cancelled = false;
     (async () => {
       setLucidLoading(true);
@@ -68,9 +117,8 @@ const ScheduleView = () => {
           );
           return;
         }
-        const day = new Date(newEvent.date as string);
         setLucidGoals(row.goals);
-        setLucidDayTasks(tasksForLucidDay(row.tasks, day));
+        setLucidDayTasks(lucidTasksForEventDisplay(row.tasks, refs, dayAnchor));
       } catch (e) {
         if (!cancelled) {
           setLucidGoals([]);
@@ -84,7 +132,15 @@ const ScheduleView = () => {
     return () => {
       cancelled = true;
     };
-  }, [showModal, lucidEnabled, newEvent.date]);
+  }, [
+    showModal,
+    detailEvent,
+    lucidEnabled,
+    newEvent.date,
+    newEvent.lucidGoalRefs,
+    detailSlot?.start,
+    detailEvent?.lucidGoalRefs,
+  ]);
 
   const handleLucidToggle = async (t: LucidTask) => {
     if (!t.tid) {
@@ -94,12 +150,16 @@ const ScheduleView = () => {
     setLucidError(null);
     setLucidTogglingTid(String(t.tid));
     try {
-      const day = new Date(newEvent.date as string);
-      await toggleLucidTaskDone(String(t.tid), day);
+      const dayAnchor =
+        showModal && newEvent.date
+          ? new Date(newEvent.date as string)
+          : detailSlot?.start ?? new Date();
+      const refs = showModal ? newEvent.lucidGoalRefs : detailEvent?.lucidGoalRefs;
+      await toggleLucidTaskDone(String(t.tid), dayAnchor);
       const row = await fetchLucidState();
       if (row) {
         setLucidGoals(row.goals);
-        setLucidDayTasks(tasksForLucidDay(row.tasks, day));
+        setLucidDayTasks(lucidTasksForEventDisplay(row.tasks, refs, dayAnchor));
       }
     } catch (e) {
       setLucidError(String((e as Error)?.message ?? e));
@@ -108,7 +168,35 @@ const ScheduleView = () => {
     }
   };
 
+  /**
+   * Opening the editor from an empty calendar slot only — never carries an event `id` (avoids stray "Edit Event"
+   * from react-big-calendar firing slot + stale state).
+   */
+  const openNewEventFromSlot = (localStart: string, localEnd: string) => {
+    setDetailEvent(null);
+    setDetailSlot(null);
+    setDetailCalId(null);
+    setEditingId(null);
+    setNewEvent({
+      title: '',
+      date: localStart,
+      endDate: localEnd,
+      moneySpent: 0,
+      moneyEarned: 0,
+      contactIds: [],
+      assetIds: [],
+      placeIds: [],
+      recurrence: 'none',
+      tasks: [],
+      lucidGoalRefs: [],
+    });
+    setShowModal(true);
+  };
+
   const openForm = (initialData: Partial<AppEvent> = {}) => {
+    setDetailEvent(null);
+    setDetailSlot(null);
+    setDetailCalId(null);
     const copiedTasks = Array.isArray(initialData.tasks)
       ? initialData.tasks.map((t) => ({ ...t }))
       : [];
@@ -158,6 +246,7 @@ const ScheduleView = () => {
         addEvent(payload as Omit<AppEvent, 'id'>);
       }
       setShowModal(false);
+      setEditingId(null);
     }
   };
 
@@ -225,36 +314,90 @@ const ScheduleView = () => {
   };
 
   const handleSelectSlot = (slotInfo: any) => {
-    // Round to local timezone string format for input type="datetime-local"
-    const tzOffset = (new Date()).getTimezoneOffset() * 60000;
-    const localStart = new Date(slotInfo.start.getTime() - tzOffset).toISOString().slice(0, 16);
-    let localEnd = new Date(slotInfo.end.getTime() - tzOffset).toISOString().slice(0, 16);
-    
-    if (localStart === localEnd) {
-       // Single click on month view means start and end are 00:00. Set end to end of day.
-       const end = new Date(slotInfo.start.getTime());
-       end.setHours(23, 59);
-       localEnd = new Date(end.getTime() - tzOffset).toISOString().slice(0, 16);
+    // Primary guard: pointerdown target was on an event (month/week fire slot even when clicking an event).
+    if (pointerDownOnCalendarEventRef.current) {
+      pointerDownOnCalendarEventRef.current = false;
+      return;
     }
 
-    openForm({
-      date: localStart,
-      endDate: localEnd
+    // Defer so `onSelectEvent` runs in the same click/tick first and can set `ignoreSlotSelectionUntilRef`
+    // and close any stray edit modal. react-big-calendar often fires slot selection on a timer (month view).
+    queueMicrotask(() => {
+      if (pointerDownOnCalendarEventRef.current) {
+        pointerDownOnCalendarEventRef.current = false;
+        return;
+      }
+      if (Date.now() < ignoreSlotSelectionUntilRef.current) {
+        return;
+      }
+
+      let clientX: number | undefined;
+      let clientY: number | undefined;
+      const box = slotInfo?.box as { clientX?: number; clientY?: number } | undefined;
+      if (box && typeof box.clientX === 'number' && typeof box.clientY === 'number') {
+        clientX = box.clientX;
+        clientY = box.clientY;
+      } else if (lastPointerRef.current) {
+        clientX = lastPointerRef.current.x;
+        clientY = lastPointerRef.current.y;
+      }
+
+      if (
+        typeof document !== 'undefined' &&
+        typeof clientX === 'number' &&
+        typeof clientY === 'number'
+      ) {
+        const top = document.elementFromPoint(clientX, clientY);
+        if (top?.closest?.('.rbc-event, .rbc-agenda-event-cell')) {
+          return;
+        }
+      }
+
+      // Round to local timezone string format for input type="datetime-local"
+      const tzOffset = new Date().getTimezoneOffset() * 60000;
+      const localStart = new Date(slotInfo.start.getTime() - tzOffset).toISOString().slice(0, 16);
+      let localEnd = new Date(slotInfo.end.getTime() - tzOffset).toISOString().slice(0, 16);
+
+      if (localStart === localEnd) {
+        // Single click on month view means start and end are 00:00. Set end to end of day.
+        const end = new Date(slotInfo.start.getTime());
+        end.setHours(23, 59);
+        localEnd = new Date(end.getTime() - tzOffset).toISOString().slice(0, 16);
+      }
+
+      openNewEventFromSlot(localStart, localEnd);
     });
   };
 
   const handleSelectEvent = (eventData: any) => {
-    // Try to find the root event if it's a recurrence
-    const rootId = eventData.id.split('-recur')[0];
-    const rootEvent = data.events.find(e => e.id === rootId);
-    if (rootEvent) {
-      const tzOffset = (new Date()).getTimezoneOffset() * 60000;
-      openForm({
-        ...rootEvent,
-        date: new Date(new Date(rootEvent.date).getTime() - tzOffset).toISOString().slice(0, 16),
-        endDate: new Date(new Date(rootEvent.endDate).getTime() - tzOffset).toISOString().slice(0, 16)
-      });
-    }
+    // Prefer info over a stray slot "new event" open; short window so the next empty-cell click still works.
+    ignoreSlotSelectionUntilRef.current = Date.now() + 220;
+    setShowModal(false);
+    setEditingId(null);
+
+    const rootId = String(eventData.id).split('-recur')[0];
+    const rootEvent = data.events.find((e) => e.id === rootId);
+    if (!rootEvent) return;
+    setDetailEvent(rootEvent);
+    setDetailSlot({
+      start: eventData.start instanceof Date ? eventData.start : new Date(eventData.start),
+      end: eventData.end instanceof Date ? eventData.end : new Date(eventData.end),
+    });
+    setDetailCalId(String(eventData.id));
+  };
+
+  const openEditFromCalendarEvent = (calEv: any) => {
+    const rootId = String(calEv.id).split('-recur')[0];
+    const rootEvent = data.events.find((e) => e.id === rootId);
+    if (!rootEvent) return;
+    const tzOffset = new Date().getTimezoneOffset() * 60000;
+    const start = calEv.start instanceof Date ? calEv.start : new Date(calEv.start);
+    const end = calEv.end instanceof Date ? calEv.end : new Date(calEv.end);
+    openForm({
+      ...rootEvent,
+      date: new Date(start.getTime() - tzOffset).toISOString().slice(0, 16),
+      endDate: new Date(end.getTime() - tzOffset).toISOString().slice(0, 16),
+    });
   };
 
   // Generate instances for recurring events
@@ -422,7 +565,7 @@ const ScheduleView = () => {
           </button>
         </div>
 
-        <div style={{ flex: 1, minHeight: '600px' }}>
+        <div ref={calendarWrapRef} style={{ flex: 1, minHeight: '600px' }}>
           <Calendar
             localizer={localizer}
             events={calendarEvents}
@@ -432,7 +575,7 @@ const ScheduleView = () => {
             views={['month', 'week', 'day', 'agenda']}
             showMultiDayTimes={true}
             components={{
-              event: EventComponent
+              event: EventComponent,
             }}
             selectable={true}
             onSelectSlot={handleSelectSlot}
@@ -447,12 +590,230 @@ const ScheduleView = () => {
         </div>
 
         <AnimatePresence>
+        {detailEvent && detailSlot && (
+          <div key="event-detail" className="modal-overlay" onClick={closeEventDetail}>
+            <motion.div
+              key="event-detail-panel"
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="modal-content"
+              onClick={(e) => e.stopPropagation()}
+              style={{ maxWidth: '540px', width: '100%', maxHeight: '88vh', overflow: 'auto' }}
+            >
+              <div
+                className="modal-header"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <h2 style={{ flex: '1 1 auto', margin: 0, minWidth: 0 }}>{detailEvent.title || 'Event'}</h2>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    openEditFromCalendarEvent({
+                      id: detailCalId ?? detailEvent.id,
+                      start: detailSlot.start,
+                      end: detailSlot.end,
+                    });
+                  }}
+                  style={{ flexShrink: 0 }}
+                >
+                  <Pencil size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+                  Edit
+                </button>
+                <button type="button" onClick={closeEventDetail} aria-label="Close" style={{ flexShrink: 0 }}>
+                  &times;
+                </button>
+              </div>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0 0 1rem', lineHeight: 1.5 }}>
+                {format(detailSlot.start, 'PPp')} — {format(detailSlot.end, 'PPp')}
+                {detailEvent.recurrence && detailEvent.recurrence !== 'none' && (
+                  <span style={{ display: 'block', marginTop: '0.35rem' }}>
+                    Repeats: <strong>{detailEvent.recurrence}</strong>
+                  </span>
+                )}
+              </p>
+
+              {(detailEvent.moneyEarned ?? 0) > 0 || (detailEvent.moneySpent ?? 0) > 0 ? (
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                  {(detailEvent.moneyEarned ?? 0) > 0 && (
+                    <span style={{ color: '#34d399', fontWeight: 600 }}>+${detailEvent.moneyEarned}</span>
+                  )}
+                  {(detailEvent.moneySpent ?? 0) > 0 && (
+                    <span style={{ color: '#f87171', fontWeight: 600 }}>-${detailEvent.moneySpent}</span>
+                  )}
+                </div>
+              ) : null}
+
+              {detailLucidGoalLabels.length > 0 && (
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <Sparkles size={16} style={{ color: '#22d3ee' }} />
+                    Linked Lucid goals
+                  </label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    {detailLucidGoalLabels.map((label, gi) => (
+                      <span
+                        key={`${label}-${gi}`}
+                        style={{
+                          padding: '0.35rem 0.75rem',
+                          borderRadius: '9999px',
+                          border: '1px solid rgba(34, 211, 238, 0.35)',
+                          fontSize: '0.8rem',
+                          color: '#e0f2fe',
+                        }}
+                      >
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="form-group" style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <ListChecks size={16} /> Checklist (this block)
+                </label>
+                {(detailEvent.tasks || []).filter((t) => String(t.label || '').trim()).length === 0 ? (
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0.35rem 0 0' }}>No tasks.</p>
+                ) : (
+                  <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem', fontSize: '0.9rem' }}>
+                    {(detailEvent.tasks || [])
+                      .filter((t) => String(t.label || '').trim())
+                      .map((t) => (
+                        <li
+                          key={t.id}
+                          style={{
+                            textDecoration: t.done ? 'line-through' : undefined,
+                            opacity: t.done ? 0.75 : 1,
+                          }}
+                        >
+                          {t.label}
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+
+              {lucidEnabled && (
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <Sparkles size={16} style={{ color: '#22d3ee' }} />
+                    Lucid tasks
+                  </label>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem' }}>
+                    {detailEvent.lucidGoalRefs?.length
+                      ? 'Tasks for linked goals (any day in Lucid).'
+                      : `Tasks on ${lucidDayKey(detailSlot.start)}.`}
+                  </p>
+                  {lucidLoading && (
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Loading Lucid…</p>
+                  )}
+                  {lucidError && (
+                    <p style={{ fontSize: '0.85rem', color: '#f87171', marginBottom: '0.5rem' }}>{lucidError}</p>
+                  )}
+                  {!lucidLoading && lucidDayTasks.length === 0 && !lucidError && (
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No Lucid tasks to show.</p>
+                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                    {lucidDayTasks.map((t) => {
+                      const tid = t.tid ? String(t.tid) : '';
+                      const busy = lucidTogglingTid === tid;
+                      return (
+                        <div
+                          key={tid || `${t.text}-${t.goalIndex}-${t.subIndex}`}
+                          style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            padding: '0.5rem 0.65rem',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(34, 211, 238, 0.25)',
+                            background: 'rgba(34, 211, 238, 0.06)',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={t.done}
+                            disabled={!tid || busy}
+                            onChange={() => void handleLucidToggle(t)}
+                            title={tid ? 'Syncs to Lucid' : 'Missing tid'}
+                          />
+                          <span style={{ flex: '1 1 200px', fontSize: '0.9rem' }}>{t.text}</span>
+                          <span
+                            style={{
+                              fontSize: '0.7rem',
+                              color: 'var(--text-muted)',
+                              maxWidth: '100%',
+                            }}
+                          >
+                            {goalLabelForTask(lucidGoals, t)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {(detailEvent.contactIds?.length ?? 0) > 0 && (
+                <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                  <label>Network</label>
+                  <p style={{ fontSize: '0.85rem', margin: '0.35rem 0 0' }}>
+                    {(detailEvent.contactIds || [])
+                      .map((id) => data.contacts.find((c) => c.id === id)?.name)
+                      .filter(Boolean)
+                      .join(', ')}
+                  </p>
+                </div>
+              )}
+
+              {(detailEvent.placeIds?.length ?? 0) > 0 && (
+                <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                  <label>Places</label>
+                  <p style={{ fontSize: '0.85rem', margin: '0.35rem 0 0' }}>
+                    {(detailEvent.placeIds || [])
+                      .map((id) => data.places.find((p) => p.id === id)?.name)
+                      .filter(Boolean)
+                      .join(', ')}
+                  </p>
+                </div>
+              )}
+
+              {(detailEvent.assetIds?.length ?? 0) > 0 && (
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <label>Assets</label>
+                  <p style={{ fontSize: '0.85rem', margin: '0.35rem 0 0' }}>
+                    {(detailEvent.assetIds || [])
+                      .map((id) => data.assets.find((a) => a.id === id)?.name)
+                      .filter(Boolean)
+                      .join(', ')}
+                  </p>
+                </div>
+              )}
+
+            </motion.div>
+          </div>
+        )}
         {showModal && (
           <div className="modal-overlay">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="modal-content">
               <div className="modal-header">
                 <h2>{editingId ? 'Edit Event' : 'New Schedule Event'}</h2>
-                <button onClick={() => setShowModal(false)}>&times;</button>
+                <button
+                  onClick={() => {
+                    setShowModal(false);
+                    setEditingId(null);
+                  }}
+                >
+                  &times;
+                </button>
               </div>
               
               <div className="form-group">
@@ -626,9 +987,10 @@ const ScheduleView = () => {
                     >
                       Goalachiever / Lucid
                     </a>
-                    . Tasks are filtered to the <strong>local calendar day</strong> of the event start (
-                    {newEvent.date ? lucidDayKey(new Date(newEvent.date as string)) : '—'}). Completing here updates
-                    Lucid immediately.
+                    .                     When this block <strong>links Lucid goals</strong>, tasks for those goals are listed (their dates in
+                    Lucid may differ from this slot). Otherwise tasks match the <strong>local calendar day</strong> of the
+                    event start ({newEvent.date ? lucidDayKey(new Date(newEvent.date as string)) : '—'}). Completing
+                    here updates Lucid immediately.
                   </p>
                   {lucidLoading && (
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Loading Lucid…</p>
@@ -833,7 +1195,15 @@ const ScheduleView = () => {
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '2rem' }}>
-                <button className="btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                <button
+                  className="btn-secondary"
+                  onClick={() => {
+                    setShowModal(false);
+                    setEditingId(null);
+                  }}
+                >
+                  Cancel
+                </button>
                 <button className="btn-primary" onClick={handleSave}>{editingId ? 'Update Event' : 'Save Event'}</button>
               </div>
             </motion.div>

@@ -119,6 +119,34 @@ export function tasksForLucidDay(tasks: LucidTask[], dayAnchor: Date): LucidTask
   return tasks.filter((t) => isTaskOnLucidDay(t, dayAnchor));
 }
 
+/** True when this Lucid task belongs to one of the linked goal refs (main goal = any subIndex under that goal). */
+export function lucidTaskMatchesGoalRefs(
+  t: LucidTask,
+  refs: { goalIndex: number; subIndex: number | null }[],
+): boolean {
+  if (!refs?.length) return false;
+  return refs.some((r) => {
+    if (t.goalIndex !== r.goalIndex) return false;
+    if (r.subIndex == null) return true;
+    return t.subIndex === r.subIndex;
+  });
+}
+
+/**
+ * Calendar UI: if the event links Lucid goals, show tasks for those goals (their `task.date` may not match the block).
+ * Otherwise mirror Lucid's day column — tasks on the same local calendar day as `dayAnchor`.
+ */
+export function lucidTasksForEventDisplay(
+  tasks: LucidTask[],
+  lucidGoalRefs: { goalIndex: number; subIndex: number | null }[] | undefined,
+  dayAnchor: Date,
+): LucidTask[] {
+  if (lucidGoalRefs?.length) {
+    return tasks.filter((t) => lucidTaskMatchesGoalRefs(t, lucidGoalRefs));
+  }
+  return tasksForLucidDay(tasks, dayAnchor);
+}
+
 export function goalLabelForTask(goals: LucidGoal[], t: LucidTask): string {
   const g = goals[t.goalIndex];
   if (!g?.title) return `Goal #${t.goalIndex}`;
