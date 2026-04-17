@@ -2,13 +2,15 @@ import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { v4 as uuidv4 } from 'uuid';
 import { useAppData } from '../context/AppDataContext';
-import type { Event as AppEvent, EventTask } from '../context/AppDataContext';
+import type { Event as AppEvent, EventTask, LucidGoalRef } from '../context/AppDataContext';
 import { Plus, UserPlus, Briefcase, MapPin, ListChecks, Trash2, Sparkles } from 'lucide-react';
 import {
+  buildLucidGoalPickOptions,
   fetchLucidState,
   goalLabelForTask,
   isLucidConfigured,
   lucidDayKey,
+  lucidGoalRefKey,
   tasksForLucidDay,
   toggleLucidTaskDone,
   type LucidGoal,
@@ -36,7 +38,7 @@ const ScheduleView = () => {
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newEvent, setNewEvent] = useState<Partial<AppEvent>>({
-    title: '', date: new Date().toISOString().slice(0, 16), endDate: new Date(Date.now() + 3600000).toISOString().slice(0, 16), moneySpent: 0, moneyEarned: 0, contactIds: [], assetIds: [], placeIds: [], recurrence: 'none', tasks: [],
+    title: '', date: new Date().toISOString().slice(0, 16), endDate: new Date(Date.now() + 3600000).toISOString().slice(0, 16), moneySpent: 0, moneyEarned: 0, contactIds: [], assetIds: [], placeIds: [], recurrence: 'none', tasks: [], lucidGoalRefs: [],
   });
 
   const [lucidGoals, setLucidGoals] = useState<LucidGoal[]>([]);
@@ -46,6 +48,8 @@ const ScheduleView = () => {
   const [lucidTogglingTid, setLucidTogglingTid] = useState<string | null>(null);
 
   const lucidEnabled = isLucidConfigured();
+
+  const lucidPickOptions = useMemo(() => buildLucidGoalPickOptions(lucidGoals), [lucidGoals]);
 
   useEffect(() => {
     if (!showModal || !lucidEnabled || !newEvent.date) return;
@@ -108,10 +112,17 @@ const ScheduleView = () => {
     const copiedTasks = Array.isArray(initialData.tasks)
       ? initialData.tasks.map((t) => ({ ...t }))
       : [];
+    const copiedRefs = Array.isArray(initialData.lucidGoalRefs)
+      ? initialData.lucidGoalRefs.map((r) => ({
+          goalIndex: r.goalIndex,
+          subIndex: r.subIndex === undefined ? null : r.subIndex,
+        }))
+      : [];
     setNewEvent({
       title: '', date: new Date().toISOString().slice(0, 16), endDate: new Date(Date.now() + 3600000).toISOString().slice(0, 16), moneySpent: 0, moneyEarned: 0, contactIds: [], assetIds: [], placeIds: [], recurrence: 'none',
       ...initialData,
       tasks: copiedTasks,
+      lucidGoalRefs: copiedRefs,
     });
     setEditingId(initialData.id || null);
     setShowModal(true);
@@ -131,11 +142,14 @@ const ScheduleView = () => {
         .map((t) => ({ ...t, label: t.label.trim() }))
         .filter((t) => t.label.length > 0);
 
+      const lucidGoalRefs = Array.isArray(newEvent.lucidGoalRefs) ? [...newEvent.lucidGoalRefs] : [];
+
       const payload = {
         ...newEvent,
         date: startD.toISOString(),
         endDate: endD.toISOString(),
         tasks,
+        lucidGoalRefs,
       };
       
       if (editingId) {
@@ -196,6 +210,17 @@ const ScheduleView = () => {
     setNewEvent({ ...newEvent, tasks });
     if (editingId) {
       updateEvent(editingId, { tasks });
+    }
+  };
+
+  const toggleLucidGoalRef = (ref: LucidGoalRef) => {
+    const refs = newEvent.lucidGoalRefs || [];
+    const k = lucidGoalRefKey(ref);
+    const has = refs.some((x) => lucidGoalRefKey(x) === k);
+    const lucidGoalRefs = has ? refs.filter((x) => lucidGoalRefKey(x) !== k) : [...refs, ref];
+    setNewEvent({ ...newEvent, lucidGoalRefs });
+    if (editingId) {
+      updateEvent(editingId, { lucidGoalRefs });
     }
   };
 
@@ -285,11 +310,18 @@ const ScheduleView = () => {
     const taskList = (event.tasks || []) as EventTask[];
     const labeled = taskList.filter((t) => String(t.label || '').trim());
     const openCount = labeled.filter((t) => !t.done).length;
+    const lucidN = Array.isArray(event.lucidGoalRefs) ? event.lucidGoalRefs.length : 0;
     return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '2px 4px', fontSize: '0.75rem', overflow: 'hidden' }}>
       <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{event.title}</div>
-      {(labeled.length > 0 || event.moneyEarned > 0 || event.moneySpent > 0 || (event.contactIds && event.contactIds.length > 0) || (event.assetIds && event.assetIds.length > 0) || (event.placeIds && event.placeIds.length > 0)) && (
+      {(lucidN > 0 || labeled.length > 0 || event.moneyEarned > 0 || event.moneySpent > 0 || (event.contactIds && event.contactIds.length > 0) || (event.assetIds && event.assetIds.length > 0) || (event.placeIds && event.placeIds.length > 0)) && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', fontSize: '0.65rem', marginTop: '2px', alignItems: 'center' }}>
+          {lucidN > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, opacity: 0.95 }} title="Lucid goals linked">
+              <Sparkles size={10} style={{ color: '#22d3ee' }} />
+              {lucidN}
+            </span>
+          )}
           {labeled.length > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, opacity: 0.95 }} title="Tasks done / total">
               <ListChecks size={10} />
@@ -427,6 +459,48 @@ const ScheduleView = () => {
                 <label>Event Title</label>
                 <input type="text" value={newEvent.title} onChange={e => setNewEvent({...newEvent, title: e.target.value})} placeholder="Goal block, deep work, workout…" autoFocus />
               </div>
+
+              {lucidEnabled && (
+                <div className="form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <Sparkles size={16} style={{ color: '#22d3ee' }} />
+                    Lucid goals (link this time block)
+                  </label>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem' }}>
+                    Pulled from <code style={{ fontSize: '0.75rem' }}>goal_app_state.goals</code>. The scheduler stores only indices; labels always match Lucid. Select one or more directives or key results.
+                  </p>
+                  {lucidPickOptions.length === 0 && !lucidLoading && (
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                      No goals in Lucid yet — add directives in Lucid first.
+                    </span>
+                  )}
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                    {lucidPickOptions.map((opt) => {
+                      const selected = (newEvent.lucidGoalRefs || []).some(
+                        (r) => lucidGoalRefKey(r) === lucidGoalRefKey(opt.ref),
+                      );
+                      return (
+                        <button
+                          key={lucidGoalRefKey(opt.ref)}
+                          type="button"
+                          onClick={() => toggleLucidGoalRef(opt.ref as LucidGoalRef)}
+                          style={{
+                            padding: '0.5rem 1rem',
+                            borderRadius: '9999px',
+                            border: `1px solid ${selected ? 'rgba(34, 211, 238, 0.65)' : 'var(--glass-border)'}`,
+                            background: selected ? 'rgba(34, 211, 238, 0.14)' : 'transparent',
+                            color: selected ? '#e0f2fe' : 'var(--text-muted)',
+                            fontSize: '0.8rem',
+                            maxWidth: '100%',
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="form-group">
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>

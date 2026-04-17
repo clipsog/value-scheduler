@@ -112,6 +112,30 @@ export function goalLabelForTask(goals: LucidGoal[], t: LucidTask): string {
   return sub?.text ? `${g.title} → ${sub.text}` : g.title;
 }
 
+export type LucidGoalPickOption = {
+  ref: { goalIndex: number; subIndex: number | null };
+  label: string;
+};
+
+export function lucidGoalRefKey(ref: { goalIndex: number; subIndex: number | null }): string {
+  return `${ref.goalIndex}-${ref.subIndex === null ? 'main' : ref.subIndex}`;
+}
+
+/** Flat list: whole goal + each subgoal, for multi-select in the scheduler. */
+export function buildLucidGoalPickOptions(goals: LucidGoal[]): LucidGoalPickOption[] {
+  const out: LucidGoalPickOption[] = [];
+  (goals || []).forEach((g, gi) => {
+    const title = String(g?.title || '').trim();
+    if (!title) return;
+    out.push({ ref: { goalIndex: gi, subIndex: null }, label: title });
+    (g.subgoals || []).forEach((s, si) => {
+      const st = String(s?.text || '').trim();
+      if (st) out.push({ ref: { goalIndex: gi, subIndex: si }, label: `${title} → ${st}` });
+    });
+  });
+  return out;
+}
+
 /**
  * Toggle one task's `done` flag and upsert the full row (same shape as Lucid's push).
  * Respects `blockedByTid` when marking complete.

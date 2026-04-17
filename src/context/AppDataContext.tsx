@@ -49,6 +49,13 @@ export type EventTask = {
   assetId?: string;
 };
 
+/** Pointer into Lucid `goal_app_state.goals` (same indices as the Lucid app). */
+export type LucidGoalRef = {
+  goalIndex: number;
+  /** `null` = whole goal; number = subgoal (key result) index */
+  subIndex: number | null;
+};
+
 export type Event = {
   id: string;
   title: string;
@@ -65,6 +72,8 @@ export type Event = {
   color?: string;
   /** Checklist for this calendar slot (goals / steps); can link rows to assets */
   tasks?: EventTask[];
+  /** Lucid directives linked to this calendar block (live titles from `goal_app_state`) */
+  lucidGoalRefs?: LucidGoalRef[];
 };
 
 export type Subscription = {
@@ -228,10 +237,25 @@ function normalizeAppData(raw: Partial<AppData> | null | undefined): AppData {
             assetId: typeof x.assetId === 'string' && x.assetId ? x.assetId : undefined,
           };
         });
+      const rawRefs = Array.isArray((ev as Event).lucidGoalRefs) ? (ev as Event).lucidGoalRefs! : [];
+      const lucidGoalRefs: LucidGoalRef[] = rawRefs
+        .filter((r) => r && typeof (r as LucidGoalRef).goalIndex === 'number' && !Number.isNaN((r as LucidGoalRef).goalIndex))
+        .map((r) => {
+          const x = r as LucidGoalRef;
+          let subIndex: number | null = null;
+          if (x.subIndex !== null && x.subIndex !== undefined && !Number.isNaN(Number(x.subIndex))) {
+            subIndex = Math.max(0, Math.floor(Number(x.subIndex)));
+          }
+          return {
+            goalIndex: Math.max(0, Math.floor(Number(x.goalIndex))),
+            subIndex,
+          };
+        });
       return {
         ...ev,
         placeIds: Array.isArray(ev.placeIds) ? ev.placeIds : [],
         tasks,
+        lucidGoalRefs,
       };
     }) as Event[],
     subscriptions: Array.isArray(e.subscriptions) ? e.subscriptions : [],
