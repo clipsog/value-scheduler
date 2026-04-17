@@ -1,6 +1,12 @@
 import 'dotenv/config';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import pg from 'pg';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distDir = path.join(__dirname, '..', 'dist');
 
 const { Pool } = pg;
 
@@ -199,10 +205,22 @@ app.put('/api/state', async (req, res) => {
   }
 });
 
+if (fs.existsSync(path.join(distDir, 'index.html'))) {
+  app.use(express.static(distDir));
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(distDir, 'index.html'), (err) => (err ? next(err) : undefined));
+  });
+}
+
 async function boot() {
   await ensureSchema();
   app.listen(PORT, () => {
-    console.log(`value-scheduler API http://127.0.0.1:${PORT}  db=${connectionString.replace(/:[^:@]+@/, ':****@')}`);
+    const staticHint = fs.existsSync(path.join(distDir, 'index.html')) ? ' + static dist' : '';
+    console.log(
+      `value-scheduler http://127.0.0.1:${PORT}${staticHint}  db=${connectionString.replace(/:[^:@]+@/, ':****@')}`,
+    );
   });
 }
 
