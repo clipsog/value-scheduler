@@ -26,18 +26,32 @@ export type LucidTask = {
   blockedByTid?: string | null;
 };
 
+/** Lucid-specific vars, or the same-project fallback used by the rest of the app. */
+function lucidResolvedUrl(): string {
+  return (
+    import.meta.env.VITE_LUCID_SUPABASE_URL?.trim() ||
+    import.meta.env.VITE_SUPABASE_URL?.trim() ||
+    ''
+  );
+}
+
+function lucidResolvedAnonKey(): string {
+  return (
+    import.meta.env.VITE_LUCID_SUPABASE_ANON_KEY?.trim() ||
+    import.meta.env.VITE_SUPABASE_ANON_KEY?.trim() ||
+    ''
+  );
+}
+
 export function isLucidConfigured(): boolean {
-  const url = import.meta.env.VITE_LUCID_SUPABASE_URL?.trim();
-  const key = import.meta.env.VITE_LUCID_SUPABASE_ANON_KEY?.trim();
-  return Boolean(url && key);
+  return Boolean(lucidResolvedUrl() && lucidResolvedAnonKey());
 }
 
 export function createLucidClient(): SupabaseClient | null {
-  if (!isLucidConfigured()) return null;
-  return createClient(
-    import.meta.env.VITE_LUCID_SUPABASE_URL as string,
-    import.meta.env.VITE_LUCID_SUPABASE_ANON_KEY as string,
-  );
+  const url = lucidResolvedUrl();
+  const key = lucidResolvedAnonKey();
+  if (!url || !key) return null;
+  return createClient(url, key);
 }
 
 /** Same calendar-day key Lucid uses (`Date.toDateString()`). */
@@ -142,7 +156,11 @@ export function buildLucidGoalPickOptions(goals: LucidGoal[]): LucidGoalPickOpti
  */
 export async function toggleLucidTaskDone(tid: string, dayAnchor: Date): Promise<void> {
   const sb = createLucidClient();
-  if (!sb) throw new Error('Lucid is not configured (set VITE_LUCID_SUPABASE_URL and VITE_LUCID_SUPABASE_ANON_KEY).');
+  if (!sb) {
+    throw new Error(
+      'Lucid is not configured (set VITE_LUCID_SUPABASE_* or VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY at build time).',
+    );
+  }
 
   const { data: row, error } = await sb
     .from(LUCID_TABLE)

@@ -460,6 +460,32 @@ const ScheduleView = () => {
                 <input type="text" value={newEvent.title} onChange={e => setNewEvent({...newEvent, title: e.target.value})} placeholder="Goal block, deep work, workout…" autoFocus />
               </div>
 
+              {!lucidEnabled && (
+                <div
+                  className="form-group"
+                  style={{
+                    padding: '0.75rem 1rem',
+                    borderRadius: '12px',
+                    border: '1px solid rgba(251, 191, 36, 0.35)',
+                    background: 'rgba(251, 191, 36, 0.06)',
+                  }}
+                >
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <Sparkles size={16} style={{ color: '#fbbf24' }} />
+                    Lucid goals (not connected)
+                  </label>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.35rem 0 0', lineHeight: 1.45 }}>
+                    Your Lucid directives live in Supabase <code style={{ fontSize: '0.72rem' }}>goal_app_state</code>. To
+                    pick them here, set <strong>Vite env at build time</strong>:{' '}
+                    <code style={{ fontSize: '0.72rem' }}>VITE_SUPABASE_URL</code> +{' '}
+                    <code style={{ fontSize: '0.72rem' }}>VITE_SUPABASE_ANON_KEY</code> (same project as Lucid), or{' '}
+                    <code style={{ fontSize: '0.72rem' }}>VITE_LUCID_SUPABASE_URL</code> +{' '}
+                    <code style={{ fontSize: '0.72rem' }}>VITE_LUCID_SUPABASE_ANON_KEY</code>, then <strong>redeploy</strong>{' '}
+                    (Render rebuilds the static bundle).
+                  </p>
+                </div>
+              )}
+
               {lucidEnabled && (
                 <div className="form-group">
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
@@ -467,11 +493,16 @@ const ScheduleView = () => {
                     Lucid goals (link this time block)
                   </label>
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem' }}>
-                    Pulled from <code style={{ fontSize: '0.75rem' }}>goal_app_state.goals</code>. The scheduler stores only indices; labels always match Lucid. Select one or more directives or key results.
+                    Same cards as in Lucid — pulled from <code style={{ fontSize: '0.75rem' }}>goal_app_state.goals</code>.
+                    Tap to link this calendar block to one or more directives or key results (stored as indices; titles
+                    always follow Lucid).
                   </p>
+                  {lucidLoading && lucidPickOptions.length === 0 && (
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Loading goals from Lucid…</span>
+                  )}
                   {lucidPickOptions.length === 0 && !lucidLoading && (
                     <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                      No goals in Lucid yet — add directives in Lucid first.
+                      No goals in Lucid yet — add directives in Lucid first (or check Supabase project matches Lucid).
                     </span>
                   )}
                   <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
@@ -504,10 +535,12 @@ const ScheduleView = () => {
 
               <div className="form-group">
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <ListChecks size={16} /> Goals &amp; tasks (optional)
+                  <ListChecks size={16} /> Scheduler checklist (optional)
                 </label>
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem' }}>
-                  Tie checklist items to <strong>Assets</strong> so this calendar slot shows what to do and what to complete. Checking a box saves immediately when editing an existing event.
+                  Extra steps for <strong>this</strong> calendar block only (not Lucid). Optional: tie lines to{' '}
+                  <strong>Assets</strong>. Lucid goals / day tasks use the <strong>Lucid</strong> sections above when
+                  connected.
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {(newEvent.tasks || []).map((task) => (
