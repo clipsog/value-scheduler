@@ -1,0 +1,463 @@
+import { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { useAppData } from '../context/AppDataContext';
+import type { Event as AppEvent } from '../context/AppDataContext';
+import { Plus, UserPlus, Briefcase, MapPin } from 'lucide-react';
+import { Calendar, dateFnsLocalizer, Views } from 'react-big-calendar';
+import { format, parse, startOfWeek, getDay, addDays, addWeeks, addMonths } from 'date-fns';
+import { enUS } from 'date-fns/locale/en-US';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
+
+const locales = {
+  'en-US': enUS,
+};
+
+const localizer = dateFnsLocalizer({
+  format,
+  parse,
+  startOfWeek,
+  getDay,
+  locales,
+});
+
+const ScheduleView = () => {
+  const { data, addEvent, updateEvent } = useAppData();
+  const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [newEvent, setNewEvent] = useState<Partial<AppEvent>>({
+    title: '', date: new Date().toISOString().slice(0, 16), endDate: new Date(Date.now() + 3600000).toISOString().slice(0, 16), moneySpent: 0, moneyEarned: 0, contactIds: [], assetIds: [], placeIds: [], recurrence: 'none'
+  });
+
+  const openForm = (initialData: Partial<AppEvent> = {}) => {
+    setNewEvent({
+      title: '', date: new Date().toISOString().slice(0, 16), endDate: new Date(Date.now() + 3600000).toISOString().slice(0, 16), moneySpent: 0, moneyEarned: 0, contactIds: [], assetIds: [], placeIds: [], recurrence: 'none',
+      ...initialData
+    });
+    setEditingId(initialData.id || null);
+    setShowModal(true);
+  };
+
+  const handleSave = () => {
+    if (newEvent.title) {
+      let startD = new Date(newEvent.date as string);
+      let endD = new Date(newEvent.endDate as string);
+      
+      // Auto-correct if user accidentally picked an end time BEFORE start time on the same date (e.g. overnight sleep)
+      if (endD <= startD) {
+        endD = new Date(endD.getTime() + 24 * 60 * 60 * 1000);
+      }
+
+      const payload = {
+        ...newEvent,
+        date: startD.toISOString(),
+        endDate: endD.toISOString(),
+      };
+      
+      if (editingId) {
+        updateEvent(editingId, payload);
+      } else {
+        addEvent(payload as Omit<AppEvent, 'id'>);
+      }
+      setShowModal(false);
+    }
+  };
+
+  const toggleContact = (cId: string) => {
+    const ids = newEvent.contactIds || [];
+    setNewEvent({ ...newEvent, contactIds: ids.includes(cId) ? ids.filter(id => id !== cId) : [...ids, cId] });
+  };
+
+  const toggleAsset = (aId: string) => {
+    const ids = newEvent.assetIds || [];
+    setNewEvent({ ...newEvent, assetIds: ids.includes(aId) ? ids.filter(id => id !== aId) : [...ids, aId] });
+  };
+
+  const togglePlace = (pId: string) => {
+    const ids = newEvent.placeIds || [];
+    setNewEvent({
+      ...newEvent,
+      placeIds: ids.includes(pId) ? ids.filter((id) => id !== pId) : [...ids, pId],
+    });
+  };
+
+  const handleSelectSlot = (slotInfo: any) => {
+    // Round to local timezone string format for input type="datetime-local"
+    const tzOffset = (new Date()).getTimezoneOffset() * 60000;
+    const localStart = new Date(slotInfo.start.getTime() - tzOffset).toISOString().slice(0, 16);
+    let localEnd = new Date(slotInfo.end.getTime() - tzOffset).toISOString().slice(0, 16);
+    
+    if (localStart === localEnd) {
+       // Single click on month view means start and end are 00:00. Set end to end of day.
+       const end = new Date(slotInfo.start.getTime());
+       end.setHours(23, 59);
+       localEnd = new Date(end.getTime() - tzOffset).toISOString().slice(0, 16);
+    }
+
+    openForm({
+      date: localStart,
+      endDate: localEnd
+    });
+  };
+
+  const handleSelectEvent = (eventData: any) => {
+    // Try to find the root event if it's a recurrence
+    const rootId = eventData.id.split('-recur')[0];
+    const rootEvent = data.events.find(e => e.id === rootId);
+    if (rootEvent) {
+      const tzOffset = (new Date()).getTimezoneOffset() * 60000;
+      openForm({
+        ...rootEvent,
+        date: new Date(new Date(rootEvent.date).getTime() - tzOffset).toISOString().slice(0, 16),
+        endDate: new Date(new Date(rootEvent.endDate).getTime() - tzOffset).toISOString().slice(0, 16)
+      });
+    }
+  };
+
+  // Generate instances for recurring events
+  const calendarEvents = useMemo(() => {
+    const instances: any[] = [];
+    const limitDate = addMonths(new Date(), 6);
+
+    data.events.forEach(ev => {
+      let currentStart = new Date(ev.date);
+      let currentEnd = new Date(ev.endDate || new Date(new Date(ev.date).getTime() + 3600000));
+      
+      // Fix instances where end time is logged before start time mathematically
+      if (currentEnd <= currentStart) {
+        currentEnd = new Date(currentEnd.getTime() + 24 * 60 * 60 * 1000);
+      }
+      
+      const durationMs = currentEnd.getTime() - currentStart.getTime();
+      
+      instances.push({
+        ...ev,
+        start: currentStart,
+        end: currentEnd
+      });
+
+      if (ev.recurrence && ev.recurrence !== 'none') {
+        let i = 1;
+        while (i < 90) { // Limit instances to prevent infinite loops visually
+          if (ev.recurrence === 'daily') {
+            currentStart = addDays(new Date(ev.date), i);
+          } else if (ev.recurrence === 'weekly') {
+            currentStart = addWeeks(new Date(ev.date), i);
+          } else if (ev.recurrence === 'monthly') {
+            currentStart = addMonths(new Date(ev.date), i);
+          }
+          currentEnd = new Date(currentStart.getTime() + durationMs);
+
+          if (currentStart > limitDate) break;
+          
+          instances.push({
+            ...ev,
+            id: `${ev.id}-recur-${i}`,
+            start: currentStart,
+            end: currentEnd
+          });
+          i++;
+        }
+      }
+    });
+    return instances;
+  }, [data.events]);
+
+  const EventComponent = ({ event }: any) => (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '2px 4px', fontSize: '0.75rem', overflow: 'hidden' }}>
+      <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{event.title}</div>
+      {(event.moneyEarned > 0 || event.moneySpent > 0 || (event.contactIds && event.contactIds.length > 0) || (event.assetIds && event.assetIds.length > 0) || (event.placeIds && event.placeIds.length > 0)) && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', fontSize: '0.65rem', marginTop: '2px' }}>
+          {event.moneyEarned > 0 && <span style={{ color: '#34d399', fontWeight: 600 }}>+${event.moneyEarned}</span>}
+          {event.moneySpent > 0 && <span style={{ color: '#f87171', fontWeight: 600 }}>-${event.moneySpent}</span>}
+          {event.contactIds && event.contactIds.length > 0 && <UserPlus size={10} style={{ opacity: 0.7 }} />}
+          {event.assetIds && event.assetIds.length > 0 && <Briefcase size={10} style={{ opacity: 0.7 }} />}
+          {event.placeIds && event.placeIds.length > 0 && <MapPin size={10} style={{ opacity: 0.85 }} />}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <>
+      {/* Refining Custom CSS for better integration with the dark aesthetic */}
+      <style>{`
+        .rbc-calendar {
+          font-family: var(--font-body);
+          color: var(--text-main);
+          background: rgba(255, 255, 255, 0.015);
+          border-radius: var(--radius-lg);
+          padding: 1rem;
+          border: 1px solid rgba(255, 255, 255, 0.05); /* Softer outer border */
+        }
+        .rbc-btn-group button {
+          color: var(--text-muted);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: transparent;
+        }
+        .rbc-btn-group button:hover {
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-main);
+        }
+        .rbc-btn-group button.rbc-active {
+          background: var(--primary);
+          color: white;
+          border-color: var(--primary);
+          box-shadow: none;
+        }
+        .rbc-toolbar button {
+          font-family: var(--font-body);
+        }
+        .rbc-header {
+          padding: 0.5rem;
+          font-weight: 600;
+          color: var(--text-muted);
+          border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+        }
+        .rbc-month-view, .rbc-time-view, .rbc-agenda-view {
+          border-color: rgba(255, 255, 255, 0.05);
+        }
+        .rbc-day-bg + .rbc-day-bg, .rbc-month-row + .rbc-month-row, .rbc-time-header-content {
+          border-color: rgba(255, 255, 255, 0.05) !important;
+        }
+        .rbc-time-content, .rbc-time-slot {
+          border-color: rgba(255, 255, 255, 0.03) !important; /* Very subtle horizontal grid lines */
+        }
+        .rbc-off-range-bg {
+          background: rgba(0,0,0,0.15);
+        }
+        .rbc-today {
+          background: rgba(99, 102, 241, 0.05);
+        }
+        .rbc-event {
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          border-radius: 6px;
+          padding: 0px !important;
+          transition: transform 0.2s, filter 0.2s;
+        }
+        .rbc-event:hover {
+          filter: brightness(1.2);
+          transform: translateY(-1px);
+        }
+        .rbc-event-content {
+          padding: 0;
+          height: 100%;
+        }
+        .rbc-time-gutter {
+          color: var(--text-muted);
+          font-size: 0.75rem;
+        }
+        .rbc-current-time-indicator {
+          background-color: var(--warning);
+        }
+      `}</style>
+      
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div className="page-header" style={{ marginBottom: '1rem' }}>
+          <h1 className="page-title">Value Schedule</h1>
+          <button className="btn-primary" onClick={() => openForm()}>
+            <Plus size={20} /> Add Event
+          </button>
+        </div>
+
+        <div style={{ flex: 1, minHeight: '600px' }}>
+          <Calendar
+            localizer={localizer}
+            events={calendarEvents}
+            startAccessor="start"
+            endAccessor="end"
+            defaultView={Views.WEEK}
+            views={['month', 'week', 'day', 'agenda']}
+            showMultiDayTimes={true}
+            components={{
+              event: EventComponent
+            }}
+            selectable={true}
+            onSelectSlot={handleSelectSlot}
+            onSelectEvent={handleSelectEvent}
+            eventPropGetter={(event: any) => ({
+              style: {
+                backgroundColor: event.color ? `${event.color}e6` : 'rgba(99, 102, 241, 0.9)',
+                borderColor: event.color ? `${event.color}90` : 'rgba(255, 255, 255, 0.1)',
+              }
+            })}
+          />
+        </div>
+
+        <AnimatePresence>
+        {showModal && (
+          <div className="modal-overlay">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="modal-content">
+              <div className="modal-header">
+                <h2>{editingId ? 'Edit Event' : 'New Schedule Event'}</h2>
+                <button onClick={() => setShowModal(false)}>&times;</button>
+              </div>
+              
+              <div className="form-group">
+                <label>Event Title</label>
+                <input type="text" value={newEvent.title} onChange={e => setNewEvent({...newEvent, title: e.target.value})} placeholder="Project Meeting" autoFocus />
+              </div>
+              
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>Start Time</label>
+                  <input type="datetime-local" value={newEvent.date} onChange={e => setNewEvent({...newEvent, date: e.target.value})} />
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>End Time</label>
+                  <input type="datetime-local" value={newEvent.endDate} onChange={e => setNewEvent({...newEvent, endDate: e.target.value})} />
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>Recurrence</label>
+                  <select value={newEvent.recurrence || 'none'} onChange={e => setNewEvent({...newEvent, recurrence: e.target.value as any})}>
+                    <option value="none" style={{ background: 'var(--bg-base)' }}>Does not repeat</option>
+                    <option value="daily" style={{ background: 'var(--bg-base)' }}>Daily</option>
+                    <option value="weekly" style={{ background: 'var(--bg-base)' }}>Weekly</option>
+                    <option value="monthly" style={{ background: 'var(--bg-base)' }}>Monthly</option>
+                  </select>
+                </div>
+                
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>Color Tag</label>
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.2rem' }}>
+                    {['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#ec4899'].map(c => (
+                      <div
+                        key={c}
+                        onClick={() => setNewEvent({...newEvent, color: c})}
+                        style={{
+                          width: '24px', height: '24px', borderRadius: '50%', background: c,
+                          border: newEvent.color === c ? '2px solid white' : '2px solid transparent',
+                          cursor: 'pointer', transition: 'all 0.2s',
+                          boxShadow: newEvent.color === c ? '0 0 10px rgba(255,255,255,0.4)' : 'none'
+                        }}
+                      />
+                    ))}
+                    
+                    {/* Native Custom Color Grid Picker */}
+                    <div style={{ position: 'relative', width: '24px', height: '24px', borderRadius: '50%', overflow: 'hidden', border: (!['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#ec4899', undefined].includes(newEvent.color)) ? '2px solid white' : '1px solid rgba(255,255,255,0.2)' }}>
+                      <input 
+                        type="color" 
+                        value={newEvent.color || '#ffffff'} 
+                        onChange={e => setNewEvent({...newEvent, color: e.target.value})}
+                        style={{ position: 'absolute', top: '-10px', left: '-10px', width: '50px', height: '50px', cursor: 'pointer', border: 'none', padding: 0 }}
+                        title="Choose custom color grid"
+                      />
+                    </div>
+
+                    <div 
+                      onClick={() => setNewEvent({...newEvent, color: undefined})}
+                      style={{
+                        width: '24px', height: '24px', borderRadius: '50%', background: 'transparent',
+                        border: !newEvent.color ? '2px solid white' : '1px dashed var(--glass-border)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer'
+                      }}
+                    >
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>/</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>Money Earned ($)</label>
+                  <input type="number" value={newEvent.moneyEarned} onChange={e => setNewEvent({...newEvent, moneyEarned: parseFloat(e.target.value) || 0})} />
+                </div>
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>Money Spent ($)</label>
+                  <input type="number" value={newEvent.moneySpent} onChange={e => setNewEvent({...newEvent, moneySpent: parseFloat(e.target.value) || 0})} />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Assets Used</label>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                  {data.assets.length === 0 && <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>No assets added globally yet.</span>}
+                  {data.assets.map(a => (
+                    <button 
+                      key={a.id}
+                      onClick={() => toggleAsset(a.id)}
+                      style={{ 
+                        padding: '0.5rem 1rem', 
+                        borderRadius: '9999px',
+                        border: `1px solid ${newEvent.assetIds?.includes(a.id) ? 'var(--primary)' : 'var(--glass-border)'}`,
+                        background: newEvent.assetIds?.includes(a.id) ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                        color: newEvent.assetIds?.includes(a.id) ? 'white' : 'var(--text-muted)'
+                      }}
+                    >
+                      {a.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Places</label>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                  {data.places.length === 0 && (
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                      Add places under Assets → Places to tag locations (gym, store, office).
+                    </span>
+                  )}
+                  {data.places.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => togglePlace(p.id)}
+                      style={{
+                        padding: '0.5rem 1rem',
+                        borderRadius: '9999px',
+                        border: `1px solid ${newEvent.placeIds?.includes(p.id) ? 'var(--primary)' : 'var(--glass-border)'}`,
+                        background: newEvent.placeIds?.includes(p.id) ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                        color: newEvent.placeIds?.includes(p.id) ? 'white' : 'var(--text-muted)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                      }}
+                    >
+                      <MapPin size={14} />
+                      {p.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Network Involved</label>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                  {data.contacts.length === 0 && <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>No contacts added globally yet.</span>}
+                  {data.contacts.map(c => (
+                    <button 
+                      key={c.id}
+                      onClick={() => toggleContact(c.id)}
+                      style={{ 
+                        padding: '0.5rem 1rem', 
+                        borderRadius: '9999px',
+                        border: `1px solid ${newEvent.contactIds?.includes(c.id) ? 'var(--primary)' : 'var(--glass-border)'}`,
+                        background: newEvent.contactIds?.includes(c.id) ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                        color: newEvent.contactIds?.includes(c.id) ? 'white' : 'var(--text-muted)'
+                      }}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '2rem' }}>
+                <button className="btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
+                <button className="btn-primary" onClick={handleSave}>{editingId ? 'Update Event' : 'Save Event'}</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+        </AnimatePresence>
+      </div>
+    </>
+  );
+};
+
+export default ScheduleView;

@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: value-scheduler-db
+    restart: unless-stopped
+    ports:
+      - "54331:5432"
+    environment:
+      POSTGRES_USER: assets
+      POSTGRES_PASSWORD: assets_dev
+      POSTGRES_DB: value_scheduler
+    volumes:
+      - value_scheduler_pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+
+volumes:
+  value_scheduler_pgdata:

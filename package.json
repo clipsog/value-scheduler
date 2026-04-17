@@ -1,0 +1,50 @@
+{
+  "name": "value-scheduler",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:keepalive": "node server/keepalive-vite.mjs",
+    "dev:full": "(sh scripts/docker.sh compose up -d || echo '[dev:full] Docker unavailable — Postgres not started; API will retry.') && sleep 2 && concurrently -k \"npm run api:keepalive\" \"npm run dev:keepalive\"",
+    "api": "node server/index.mjs",
+    "api:keepalive": "node server/keepalive.mjs",
+    "db:up": "sh scripts/docker.sh compose up -d",
+    "db:down": "sh scripts/docker.sh compose down",
+    "db:migrate-to-pg": "node scripts/migrate-asset-scheduler-to-pg.mjs",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.102.1",
+    "date-fns": "^4.1.0",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.7.0",
+    "pg": "^8.14.1",
+    "react": "^19.2.4",
+    "react-big-calendar": "^1.19.4",
+    "react-dom": "^19.2.4",
+    "rrule": "^2.8.1",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@types/node": "^24.12.2",
+    "@types/react": "^19.2.14",
+    "@types/react-big-calendar": "^1.16.3",
+    "@types/react-dom": "^19.2.3",
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.4.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.58.0",
+    "vite": "^8.0.4"
+  }
+}
