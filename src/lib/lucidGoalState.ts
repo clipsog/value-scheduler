@@ -136,17 +136,13 @@ export function lucidGoalRefKey(ref: { goalIndex: number; subIndex: number | nul
   return `${ref.goalIndex}-${ref.subIndex === null ? 'main' : ref.subIndex}`;
 }
 
-/** Flat list: whole goal + each subgoal, for multi-select in the scheduler. */
+/** Top-level Lucid goals only (no subgoals / key results). */
 export function buildLucidGoalPickOptions(goals: LucidGoal[]): LucidGoalPickOption[] {
   const out: LucidGoalPickOption[] = [];
   (goals || []).forEach((g, gi) => {
     const title = String(g?.title || '').trim();
     if (!title) return;
     out.push({ ref: { goalIndex: gi, subIndex: null }, label: title });
-    (g.subgoals || []).forEach((s, si) => {
-      const st = String(s?.text || '').trim();
-      if (st) out.push({ ref: { goalIndex: gi, subIndex: si }, label: `${title} → ${st}` });
-    });
   });
   return out;
 }

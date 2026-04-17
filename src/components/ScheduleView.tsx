@@ -494,8 +494,8 @@ const ScheduleView = () => {
                   </label>
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0.25rem 0 0.5rem' }}>
                     Same cards as in Lucid — pulled from <code style={{ fontSize: '0.75rem' }}>goal_app_state.goals</code>.
-                    Tap to link this calendar block to one or more directives or key results (stored as indices; titles
-                    always follow Lucid).
+                    Tap to link this calendar block to one or more main goals only (stored as indices; titles always follow
+                    Lucid).
                   </p>
                   {lucidLoading && lucidPickOptions.length === 0 && (
                     <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Loading goals from Lucid…</span>
