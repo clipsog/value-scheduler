@@ -45,20 +45,48 @@ function resolveDatabaseUrl() {
   return url;
 }
 
+/** Supabase direct `db.*.supabase.co:5432` often resolves AAAA first; Render may have no IPv6 route. */
+async function resolveSupabaseDirectHostnameToIpv4(connectionString) {
+  const httpish = connectionString.replace(/^postgres(ql)?:/i, 'http:');
+  let u;
+  try {
+    u = new URL(httpish);
+  } catch {
+    return connectionString;
+  }
+  const host = u.hostname;
+  const port = u.port || '5432';
+  if (!/^db\.[^.]+\.supabase\.co$/i.test(host) || port !== '5432') {
+    return connectionString;
+  }
+  try {
+    const { address } = await dns.promises.lookup(host, { family: 4 });
+    u.hostname = address;
+    const out = u.toString().replace(/^http:/i, 'postgresql:');
+    console.log(`[value-scheduler] resolved ${host} → ${address} (IPv4 for Postgres)`);
+    return out;
+  } catch (e) {
+    console.warn('[value-scheduler] IPv4 lookup failed, using hostname:', e?.message ?? e);
+    return connectionString;
+  }
+}
+
 let connectionString;
 let dbIsLocal;
 let pool;
 
 try {
   connectionString = resolveDatabaseUrl();
+  const connStr = await resolveSupabaseDirectHostnameToIpv4(connectionString);
   dbIsLocal =
-    connectionString.includes('127.0.0.1') ||
-    connectionString.includes('localhost') ||
-    connectionString.includes('@host.docker.internal');
+    connStr.includes('127.0.0.1') ||
+    connStr.includes('localhost') ||
+    connStr.includes('@host.docker.internal');
   pool = new Pool({
-    connectionString,
+    connectionString: connStr,
     ssl: dbIsLocal ? false : { rejectUnauthorized: false },
   });
+  connectionString = connStr;
 } catch (e) {
   console.error('[value-scheduler]', e?.message ?? e);
   process.exit(1);
