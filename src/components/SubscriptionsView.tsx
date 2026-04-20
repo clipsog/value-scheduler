@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useAppData } from '../context/AppDataContext';
 import type { Subscription } from '../context/AppDataContext';
@@ -6,6 +6,8 @@ import { Plus, Activity, AlertCircle } from 'lucide-react';
 
 const SubscriptionsView = () => {
   const { data, addSubscription, updateSubscription } = useAppData();
+  const [sharedSubs, setSharedSubs] = useState<Subscription[] | null>(null);
+  const [sharedAvailable, setSharedAvailable] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [newSub, setNewSub] = useState<Partial<Subscription>>({
     name: '', cost: 0, usageCount: 0, status: 'active'
@@ -23,17 +25,63 @@ const SubscriptionsView = () => {
     updateSubscription(sub.id, { usageCount: sub.usageCount + 1 });
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadShared = async () => {
+      try {
+        const r = await fetch('/api/shared/finance');
+        if (!r.ok) return;
+        const payload = await r.json();
+        if (cancelled) return;
+        if (payload?.available && Array.isArray(payload?.subscriptions)) {
+          setSharedAvailable(true);
+          setSharedSubs(
+            payload.subscriptions.map((s: any) => ({
+              id: String(s.id),
+              name: String(s.name ?? ''),
+              cost: Number(s.cost ?? 0),
+              currency: s.currency ? String(s.currency) : 'USD',
+              usageCount: Number(s.usageCount ?? 0),
+              status:
+                s.status === 'active' || s.status === 'evaluating' || s.status === 'cancelled'
+                  ? s.status
+                  : 'active',
+            }))
+          );
+        }
+      } catch {
+        /* fallback to local state */
+      }
+    };
+    void loadShared();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const subscriptionRows = useMemo(
+    () => (sharedAvailable && sharedSubs ? sharedSubs : data.subscriptions),
+    [data.subscriptions, sharedAvailable, sharedSubs]
+  );
+
   return (
     <div>
       <div className="page-header">
         <h1 className="page-title">Subscriptions & Tools</h1>
-        <button className="btn-primary" onClick={() => setShowModal(true)}>
-          <Plus size={20} /> Add Tool
-        </button>
+        {!sharedAvailable && (
+          <button className="btn-primary" onClick={() => setShowModal(true)}>
+            <Plus size={20} /> Add Tool
+          </button>
+        )}
       </div>
+      {sharedAvailable && (
+        <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
+          Showing shared subscriptions from the linked common database.
+        </p>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.5rem' }}>
-        {data.subscriptions.map(sub => (
+        {subscriptionRows.map(sub => (
           <motion.div key={sub.id} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="glass-panel" style={{ padding: '1.5rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
               <h3 style={{ fontSize: '1.25rem' }}>{sub.name}</h3>
@@ -45,7 +93,10 @@ const SubscriptionsView = () => {
             </div>
             
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.25rem', marginBottom: '1.5rem' }}>
-              <span style={{ fontSize: '2rem', fontWeight: 700 }}>${sub.cost.toFixed(2)}</span>
+              <span style={{ fontSize: '2rem', fontWeight: 700 }}>
+                {sub.currency && sub.currency !== 'USD' ? `${sub.currency} ` : '$'}
+                {sub.cost.toFixed(2)}
+              </span>
               <span style={{ color: 'var(--text-muted)' }}>/month</span>
             </div>
 
@@ -65,12 +116,18 @@ const SubscriptionsView = () => {
             </div>
 
             <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button className="btn-secondary" style={{ flex: 1, padding: '0.5rem' }} onClick={() => incrementUsage(sub)}>
+              <button
+                className="btn-secondary"
+                style={{ flex: 1, padding: '0.5rem' }}
+                onClick={() => incrementUsage(sub)}
+                disabled={sharedAvailable}
+              >
                 <Activity size={16} /> Log Usage
               </button>
               <select 
                 value={sub.status} 
                 onChange={(e) => updateSubscription(sub.id, { status: e.target.value as any })}
+                disabled={sharedAvailable}
                 style={{ background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-sm)' }}
               >
                 <option value="active" style={{ background: 'var(--bg-base)' }}>Active</option>
@@ -82,7 +139,7 @@ const SubscriptionsView = () => {
         ))}
       </div>
 
-      {showModal && (
+      {showModal && !sharedAvailable && (
         <div className="modal-overlay">
           <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="modal-content">
             <div className="modal-header">

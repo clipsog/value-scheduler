@@ -249,6 +249,71 @@ app.get('/api/state', async (_req, res) => {
   }
 });
 
+app.get('/api/shared/finance', async (_req, res) => {
+  try {
+    const [subsQ, accountsQ, bizIncomeQ] = await Promise.all([
+      pool.query(
+        `select id, source_id, name, cost, currency, status, usage_count, updated_at
+         from shared_subscriptions
+         order by updated_at desc`
+      ),
+      pool.query(
+        `select
+           count(*)::int as total_accounts,
+           coalesce(sum(balance), 0)::numeric as total_balance
+         from shared_accounts`
+      ),
+      pool.query(
+        `select
+           coalesce(sum(amount), 0)::numeric as all_time_business_income,
+           coalesce(
+             sum(amount) filter (
+               where occurred_on >= date_trunc('month', current_date)::date
+             ),
+             0
+           )::numeric as month_business_income
+         from shared_transactions
+         where kind = 'business_income'`
+      ),
+    ]);
+
+    const activeSubCost = subsQ.rows
+      .filter((r) => String(r.status ?? '').toLowerCase() === 'active')
+      .reduce((sum, r) => sum + Number(r.cost ?? 0), 0);
+
+    return res.json({
+      available: true,
+      subscriptions: subsQ.rows.map((r) => ({
+        id: String(r.id),
+        sourceId: String(r.source_id ?? ''),
+        name: String(r.name ?? ''),
+        cost: Number(r.cost ?? 0),
+        currency: r.currency ? String(r.currency) : 'USD',
+        status: String(r.status ?? ''),
+        usageCount: Number(r.usage_count ?? 0),
+      })),
+      accounts: {
+        total: Number(accountsQ.rows[0]?.total_accounts ?? 0),
+        totalBalance: Number(accountsQ.rows[0]?.total_balance ?? 0),
+      },
+      businessIncome: {
+        month: Number(bizIncomeQ.rows[0]?.month_business_income ?? 0),
+        allTime: Number(bizIncomeQ.rows[0]?.all_time_business_income ?? 0),
+      },
+      subscriptionsSummary: {
+        total: subsQ.rows.length,
+        activeCostMonthly: activeSubCost,
+      },
+    });
+  } catch (e) {
+    return res.status(200).json({
+      available: false,
+      error: String(e?.message ?? e),
+      hint: 'Run the Levels bridge linker first to create/populate shared tables.',
+    });
+  }
+});
+
 app.put('/api/state', async (req, res) => {
   const body = req.body?.state;
   if (!body || typeof body !== 'object') {

@@ -1,10 +1,16 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useAppData } from '../context/AppDataContext';
 import { TrendingUp, TrendingDown, Users, Calendar, DollarSign, Activity, MapPin } from 'lucide-react';
 
 const DashboardView = () => {
   const { data } = useAppData();
+  const [sharedFinance, setSharedFinance] = useState<null | {
+    available: boolean;
+    subscriptionsSummary?: { total: number; activeCostMonthly: number };
+    accounts?: { total: number; totalBalance: number };
+    businessIncome?: { month: number; allTime: number };
+  }>(null);
 
   const totalSpent = data.events.reduce((sum, e) => sum + e.moneySpent, 0);
   const totalEarned = data.events.reduce((sum, e) => sum + e.moneyEarned, 0);
@@ -41,6 +47,32 @@ const DashboardView = () => {
   }, [data.places, placeRevenue]);
   
   const totalSubCost = data.subscriptions.reduce((sum, s) => s.status === 'active' ? sum + s.cost : sum, 0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadShared = async () => {
+      try {
+        const r = await fetch('/api/shared/finance');
+        if (!r.ok) return;
+        const payload = await r.json();
+        if (!cancelled) setSharedFinance(payload);
+      } catch {
+        /* fallback to local-only dashboard */
+      }
+    };
+    void loadShared();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const sharedMode = Boolean(sharedFinance?.available);
+  const subCostDisplay = sharedMode
+    ? Number(sharedFinance?.subscriptionsSummary?.activeCostMonthly ?? 0)
+    : totalSubCost;
+  const subsEvaluatingCount = sharedMode
+    ? 0
+    : data.subscriptions.filter((s) => s.status === 'evaluating').length;
 
   const StatCard = ({ title, value, icon, trend, positive }: any) => (
     <motion.div 
@@ -83,10 +115,32 @@ const DashboardView = () => {
         />
         <StatCard 
           title="Active Subscriptions" 
-          value={`$${totalSubCost.toFixed(2)} /mo`}
+          value={`$${subCostDisplay.toFixed(2)} /mo`}
           icon={<Activity size={20} />}
-          trend={`${data.subscriptions.filter(s => s.status === 'evaluating').length} evaluating`}
+          trend={
+            sharedMode
+              ? `${sharedFinance?.subscriptionsSummary?.total ?? 0} shared tools`
+              : `${subsEvaluatingCount} evaluating`
+          }
           positive={false}
+        />
+        <StatCard
+          title="Accounts (shared)"
+          value={sharedMode ? `${sharedFinance?.accounts?.total ?? 0}` : `${data.contacts.length}`}
+          icon={<DollarSign size={20} />}
+          trend={
+            sharedMode
+              ? `Total balance $${Number(sharedFinance?.accounts?.totalBalance ?? 0).toFixed(2)}`
+              : 'Link shared tables to enable'
+          }
+          positive={true}
+        />
+        <StatCard
+          title="Business income (month)"
+          value={`$${Number(sharedFinance?.businessIncome?.month ?? 0).toFixed(2)}`}
+          icon={<TrendingUp size={20} />}
+          trend={`All-time $${Number(sharedFinance?.businessIncome?.allTime ?? 0).toFixed(2)}`}
+          positive={true}
         />
         <StatCard 
           title="Network Connections" 

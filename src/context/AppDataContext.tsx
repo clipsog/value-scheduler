@@ -84,6 +84,8 @@ export type Subscription = {
   id: string;
   name: string;
   cost: number;
+  /** ISO currency code when synced from shared DB (e.g. Levels bills). */
+  currency?: string;
   usageCount: number;
   status: 'active' | 'evaluating' | 'cancelled';
 };
